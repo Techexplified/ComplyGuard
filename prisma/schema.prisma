@@ -1,0 +1,74 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Note that some adapters may set a maximum length for the String type by default, please ensure your strings are long
+// enough when changing adapters.
+// See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
+datasource db {
+  provider = "sqlite"
+  url      = "file:dev.sqlite"
+}
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+  refreshToken        String?
+  refreshTokenExpires DateTime?
+}
+
+
+model Shop {
+  id              String         @id
+  shopDomain      String         @unique
+  accessToken     String
+  complianceScore Int            @default(0)
+  lastScannedAt   DateTime?
+  scans           Scan[]
+  issues          Issue[]
+  settings        ShopSettings?
+  onBoarding      Boolean        @default(false)
+  createdAt       DateTime       @default(now())
+}
+
+model Scan {
+  id              String      @id @default(cuid())
+  shopId          String
+  shop            Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  score           Int
+  totalChecks     Int
+  passedChecks    Int
+  failedChecks    Int
+  categoryScores  Json        // { policy: 85, identity: 60, feed: 90, trust: 100 }
+  createdAt       DateTime    @default(now())
+}
+model Issue {
+  id          String      @id @default(cuid())
+  shopId      String
+  shop        Shop        @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  category    String      // "POLICY", "IDENTITY", "PRODUCT_FEED", "TRUST_SIGNALS", "AUP_RISK"
+  severity    String      // "CRITICAL", "WARNING", "INFO"
+  ruleCode    String      // "REFUND_POLICY_NOT_IN_FOOTER", "MISSING_GTIN", "RISKY_CLAIM_DETECTED"
+  title       String
+  description String
+  resourceId  String?     // e.g., Product ID or Policy ID
+  fixGuide    String      // Step-by-step instructions or deep-link into Shopify Admin
+  resolved    Boolean     @default(false)
+  createdAt   DateTime    @default(now())
+}
