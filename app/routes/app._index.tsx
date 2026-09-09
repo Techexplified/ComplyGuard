@@ -7,7 +7,7 @@ import prisma from "../db.server";
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopDomain = session.shop;
-
+   
   // Retrieve or initialize the shop record in database
   let shopRecord = await prisma.shop.findUnique({
     where: { shopDomain },
@@ -24,9 +24,12 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     });
   }
 
-  // Check onboarding status: if false, redirect immediately to /app/onBoarding
+  
+  const url = new URL(request.url);
+
+  // Check onboarding status: if false, redirect immediately to /app/onboarding
   if (!shopRecord.onBoarding) {
-    return redirect("/app/onBoarding");
+    return redirect(`/app/onboarding${url.search}`);
   }
 
   return { shop: shopRecord };
@@ -37,13 +40,15 @@ export const action = async ({ request }: LoaderFunctionArgs) => {
   const formData = await request.formData();
   const intent = formData.get("intent");
 
+  const url = new URL(request.url);
+
   // Allow resetting onboarding for testing
   if (intent === "reset_onboarding") {
     await prisma.shop.update({
       where: { shopDomain: session.shop },
       data: { onBoarding: false },
     });
-    return redirect("/app/onBoarding");
+    return redirect(`/app/onboarding${url.search}`);
   }
 
   return null;
