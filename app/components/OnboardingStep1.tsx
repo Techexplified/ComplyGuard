@@ -82,8 +82,8 @@ export function OnboardingStep1({ onContinue }: OnboardingStep1Props) {
             Monitor
           </h3>
           <p className="text-[13.5px] leading-relaxed text-zinc-600">
-            Get alerted the moment a policy edit or product change puts you at risk — before{" "}
-            <strong className="text-zinc-900 font-semibold">Shopify</strong> notices.
+            Get alerted the moment a policy edit or product change puts you at risk before{" "}
+            Shopify notices.
           </p>
         </div>
 

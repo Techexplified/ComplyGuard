@@ -1,18 +1,20 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
   LoaderFunctionArgs,
 } from "react-router";
 import {
-  redirect,
+  Link,
   useFetcher,
   useLoaderData,
+  useLocation,
   useRouteError,
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { runStorefrontComplianceScan } from "../service/scanner.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -26,57 +28,48 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { admin, session } = await authenticate.admin(request);
   const shopDomain = session.shop;
-  const url = new URL(request.url);
 
-  // Record completed initial scan in database
-  await prisma.$transaction([
-    prisma.scan.create({
-      data: {
-        shopId: shopDomain,
-        score: 92,
-        totalChecks: 18,
-        passedChecks: 17,
-        failedChecks: 1,
-        categoryScores: {
-          policy: 95,
-          identity: 100,
-          feed: 90,
-          trust: 85,
-        },
-      },
-    }),
-    prisma.shop.update({
-      where: { shopDomain },
-      data: {
-        complianceScore: 92,
-        lastScannedAt: new Date(),
-      },
-    }),
-  ]);
+  try {
+    // Run the real 18-check compliance scan against storefront & admin API
+    const scanResult = await runStorefrontComplianceScan({ admin, shopDomain });
 
-  return redirect(`/app${url.search}`);
+    return {
+      success: true,
+      score: scanResult.score,
+      passedChecks: scanResult.passedChecks,
+      totalChecks: scanResult.totalChecks,
+      issuesCount: scanResult.issues.length,
+      issues: scanResult.issues,
+    };
+  } catch (error) {
+    console.error("Scanning action failed:", error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : "Scan failed",
+    };
+  }
 };
 
 const CHECKS = [
   {
-    id: "policies",
+    id: "POLICY",
     label: "Refund, Privacy, and Terms of Service policies",
     threshold: 25,
   },
   {
-    id: "contact",
+    id: "IDENTITY",
     label: "Merchant contact details and support email",
     threshold: 50,
   },
   {
-    id: "catalog",
+    id: "PRODUCT_FEED",
     label: "Product feed data, GTINs, and risky claim triggers",
     threshold: 75,
   },
   {
-    id: "storefront",
+    id: "TRUST_SIGNALS",
     label: "Storefront theme embed and payment trust badges",
     threshold: 95,
   },
@@ -84,47 +77,77 @@ const CHECKS = [
 
 export default function ScanningPage() {
   const { shop } = useLoaderData<typeof loader>();
-  const [progress, setProgress] = useState(12);
-  const [currentStatusText, setCurrentStatusText] = useState(
-    "Initializing compliance engine..."
-  );
-  const fetcher = useFetcher();
-  const isCompleting = ["loading", "submitting"].includes(fetcher.state);
+  const location = useLocation();
+  const fetcher = useFetcher<typeof action>();
 
+  const [progress, setProgress] = useState(15);
+  const [currentStatusText, setCurrentStatusText] = useState(
+    "Connecting to storefront & compliance engine..."
+  );
+
+  const hasTriggeredRef = useRef(false);
+
+  // 1. Trigger the real scan automatically as soon as the page loads!
   useEffect(() => {
+    if (!hasTriggeredRef.current && fetcher.state === "idle" && !fetcher.data) {
+      hasTriggeredRef.current = true;
+      fetcher.submit({}, { method: "POST" });
+    }
+  }, [fetcher]);
+
+  // 2. Smoothly animate progress bar while the backend scan executes
+  useEffect(() => {
+    const isScanComplete = Boolean(fetcher.data?.success);
+
     const interval = setInterval(() => {
       setProgress((prev) => {
+        // Hold at 90% if backend scan hasn't responded yet
+        if (!isScanComplete && prev >= 90) {
+          return 90;
+        }
+
         if (prev >= 100) {
           clearInterval(interval);
           return 100;
         }
 
-        const next = Math.min(prev + Math.floor(Math.random() * 8) + 4, 100);
+        const increment = isScanComplete
+          ? 6
+          : Math.floor(Math.random() * 5) + 3;
+        const next = Math.min(prev + increment, isScanComplete ? 100 : 90);
 
         if (next < 30) {
           setCurrentStatusText("Checking refund policy and legal footer links...");
         } else if (next < 60) {
-          setCurrentStatusText("Verifying merchant contact information and physical address...");
+          setCurrentStatusText(
+            "Verifying merchant contact information and physical address..."
+          );
         } else if (next < 85) {
-          setCurrentStatusText("Scanning catalog feeds and analyzing product descriptions...");
+          setCurrentStatusText(
+            "Scanning catalog feeds and analyzing product descriptions..."
+          );
         } else if (next < 100) {
-          setCurrentStatusText("Inspecting storefront embed visibility and trust badges...");
+          setCurrentStatusText(
+            "Inspecting storefront embed visibility and trust badges..."
+          );
         } else {
-          setCurrentStatusText("Scan complete! Compiling compliance health score...");
+          setCurrentStatusText(
+            fetcher.data?.score !== undefined
+              ? `Scan complete! Store compliance health score: ${fetcher.data.score}/100`
+              : "Scan complete! Compiling compliance health score..."
+          );
         }
 
         return next;
       });
-    }, 450);
+    }, 250);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [fetcher.data]);
 
-  const handleProceedToDashboard = () => {
-    fetcher.submit({}, { method: "POST" });
-  };
-
-  const isFinished = progress >= 100;
+  const scanData = fetcher.data;
+  const isFinished = Boolean(scanData?.success) && progress >= 100;
+  const hasError = fetcher.data && !fetcher.data.success;
 
   return (
     <div className="min-h-screen bg-[#f4f4f5] text-zinc-900 flex flex-col items-center justify-center p-4 sm:p-6 antialiased font-sans">
@@ -183,13 +206,13 @@ export default function ScanningPage() {
 
         {/* Title */}
         <h1 className="text-2xl sm:text-3xl font-bold text-zinc-900 tracking-tight leading-tight mb-2">
-          {isFinished ? "First scan complete!" : "Scanning your store"}
+          {isFinished ? "Store scan completed!" : "Scanning your store"}
         </h1>
 
         {/* Subtitle */}
         <p className="text-sm text-zinc-600 max-w-md mx-auto mb-6">
           {isFinished
-            ? `18 checks verified for ${shop}. Your store is now protected.`
+            ? `Baseline established for ${shop}. Score: ${scanData?.score}/100 (${scanData?.passedChecks}/${scanData?.totalChecks} checks passed).`
             : `Running 18 compliance and policy checks across ${shop}...`}
         </p>
 
@@ -214,6 +237,12 @@ export default function ScanningPage() {
               progress < check.threshold &&
               progress >= check.threshold - 25;
 
+            // Check if there are any issues for this category from real scan
+            const categoryIssues = (scanData?.issues || []).filter(
+              (i) => i.category === check.id
+            );
+            const hasIssue = isCompleted && categoryIssues.length > 0;
+
             return (
               <div
                 key={check.id}
@@ -223,25 +252,31 @@ export default function ScanningPage() {
                   <div
                     className={`w-4.5 h-4.5 rounded-full flex items-center justify-center shrink-0 ${
                       isCompleted
-                        ? "bg-[#faeae3] text-[#c25e37]"
+                        ? hasIssue
+                          ? "bg-amber-100 text-amber-700"
+                          : "bg-[#faeae3] text-[#c25e37]"
                         : isCurrent
                         ? "bg-amber-100 text-amber-700 animate-pulse"
                         : "bg-zinc-200 text-zinc-400"
                     }`}
                   >
                     {isCompleted ? (
-                      <svg
-                        width="10"
-                        height="10"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="#c25e37"
-                        strokeWidth="3.5"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
+                      hasIssue ? (
+                        <span className="text-[10px] font-bold">!</span>
+                      ) : (
+                        <svg
+                          width="10"
+                          height="10"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="#c25e37"
+                          strokeWidth="3.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <polyline points="20 6 9 17 4 12" />
+                        </svg>
+                      )
                     ) : (
                       <span className="w-1.5 h-1.5 rounded-full bg-current" />
                     )}
@@ -262,14 +297,18 @@ export default function ScanningPage() {
                 <span
                   className={`font-mono text-[11px] ${
                     isCompleted
-                      ? "text-[#c25e37] font-semibold"
+                      ? hasIssue
+                        ? "text-amber-700 font-medium"
+                        : "text-[#c25e37] font-semibold"
                       : isCurrent
                       ? "text-amber-600 font-medium"
                       : "text-zinc-400"
                   }`}
                 >
                   {isCompleted
-                    ? "Passed ✓"
+                    ? hasIssue
+                      ? `${categoryIssues.length} issue${categoryIssues.length > 1 ? "s" : ""}`
+                      : "Passed ✓"
                     : isCurrent
                     ? "Checking..."
                     : "Pending"}
@@ -279,16 +318,29 @@ export default function ScanningPage() {
           })}
         </div>
 
+        {/* Error State */}
+        {hasError && (
+          <div className="mb-6 p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs">
+            <p className="font-semibold mb-1">Scan Error:</p>
+            <p className="mb-3">{fetcher.data?.error}</p>
+            <button
+              type="button"
+              onClick={() => fetcher.submit({}, { method: "POST" })}
+              className="px-4 py-1.5 rounded-lg bg-red-600 text-white font-medium hover:bg-red-700 transition cursor-pointer"
+            >
+              Retry Scan
+            </button>
+          </div>
+        )}
+
         {/* Action Button */}
         {isFinished ? (
-          <button
-            type="button"
-            disabled={isCompleting}
-            onClick={handleProceedToDashboard}
-            className="w-full bg-[#f05423] hover:bg-[#d94819] active:scale-[0.99] disabled:opacity-60 text-white font-semibold text-base py-3.5 rounded-xl transition shadow-sm cursor-pointer"
+          <Link
+            to={`/app${location.search}`}
+            className="w-full bg-[#f05423] hover:bg-[#d94819] active:scale-[0.99] text-white font-semibold text-base py-3.5 rounded-xl transition shadow-sm block text-center cursor-pointer"
           >
-            {isCompleting ? "Loading Dashboard..." : "Go to Dashboard →"}
-          </button>
+            View Dashboard →
+          </Link>
         ) : (
           <p className="text-xs text-zinc-400 font-mono">
             Read-only scan • Changes nothing on your store
@@ -306,4 +358,3 @@ export function ErrorBoundary() {
 export const headers: HeadersFunction = (headersArgs) => {
   return boundary.headers(headersArgs);
 };
-
