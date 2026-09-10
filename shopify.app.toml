@@ -2,7 +2,7 @@
 
 client_id = "3a63de05aa19f515923602ee95bb85da"
 name = "ComplyGuard"
-application_url = "https://example.com"
+application_url = "https://comply-guard.vercel.app"
 embedded = true
 
 [access_scopes]
@@ -45,7 +45,7 @@ api_version = "2026-10"
   topics = [ "app/scopes_update" ]
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [ "https://comply-guard.vercel.app/api/auth" ]
 
 [build]
 automatically_update_urls_on_dev = true
