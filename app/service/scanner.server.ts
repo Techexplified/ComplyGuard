@@ -1,5 +1,10 @@
 import * as cheerio from "cheerio";
 import prisma from "../db.server";
+import {
+  checkPolicyQuality,
+  checkPhysicalAddress,
+  checkProductClaims,
+} from "./ai-checks.server";
 
 interface ScanContext {
   admin: {
@@ -305,6 +310,25 @@ interface StorefrontProduct {
     ]);
 
   // =============================================================
+  // AI PRE-CHECKS (Parallel) — Results used in checks 2, 9, 15
+  // =============================================================
+  console.log("[Scanner] Running AI pre-checks in parallel (checks 2, 9, 15)...");
+  const [aiPolicyResult, aiAddressResult, aiClaimsResult] = await Promise.all([
+    // Check 2: Policy quality
+    checkPolicyQuality(refundData.exists ? refundData.text : ""),
+    // Check 9: Physical address
+    checkPhysicalAddress(`${homepageHtml} ${contactPageHtml}`),
+    // Check 15: Product claims
+    checkProductClaims(
+      products.map((p: { title: string; descriptionHtml: string }) => ({
+        title: p.title,
+        description: p.descriptionHtml || "",
+      }))
+    ),
+  ]);
+  console.log("[Scanner] AI pre-checks complete.");
+
+  // =============================================================
   // CATEGORY 1: POLICY PAGES (6 Checks)
   // =============================================================
 
@@ -325,23 +349,9 @@ interface StorefrontProduct {
   }
 
   // Check 2: Refund policy contains required disclosure language (timeframe, conditions)
+  // ── Now powered by GPT-4o-mini via OpenRouter (falls back to keyword check if no API key) ──
   if (refundData.exists) {
-    const text = refundData.text.toLowerCase();
-    const hasTimeframe =
-      /\b(\d{1,3}\s*(day|days|business days|month|weeks))\b/i.test(text) ||
-      text.includes("return window") ||
-      text.includes("30 days") ||
-      text.includes("14 days");
-    const hasConditions =
-      text.includes("condition") ||
-      text.includes("unused") ||
-      text.includes("unworn") ||
-      text.includes("original packaging") ||
-      text.includes("receipt") ||
-      text.includes("proof of purchase") ||
-      text.includes("damaged");
-
-    if (hasTimeframe && hasConditions && text.split(/\s+/).length >= 50) {
+    if (aiPolicyResult.pass) {
       passedChecks++;
     } else {
       issues.push({
@@ -349,10 +359,9 @@ interface StorefrontProduct {
         severity: "WARNING",
         ruleCode: "REFUND_POLICY_DISCLOSURE_INCOMPLETE",
         title: "Refund policy missing required disclosure language",
-        description:
-          "Your refund policy appears incomplete or uses a blank template. It must clearly disclose concrete return timeframes (e.g. 30 days) and acceptable product return conditions.",
+        description: `AI analysis: ${aiPolicyResult.reason}${aiPolicyResult.missingElements.length > 0 ? ` Missing: ${aiPolicyResult.missingElements.join(", ")}.` : ""}`,
         fixGuide:
-          "Update your Refund Policy in Settings > Policies to explicitly state the return timeframe (e.g. '30 days') and item condition requirements.",
+          "Update your Refund Policy in Settings > Policies to explicitly state the return timeframe (e.g. '30 days') and item condition requirements (e.g. unused, original packaging).",
       });
     }
   } else {
@@ -367,6 +376,7 @@ interface StorefrontProduct {
         "Create and publish your Refund Policy with clear return timeframes and conditions.",
     });
   }
+
 
   // Check 3: Shipping policy page exists
   if (shippingData.exists) {
@@ -544,28 +554,8 @@ interface StorefrontProduct {
   }
 
   // Check 9: Physical business address present
-  const ADDRESS_TERMS = [
-    "street",
-    " st.",
-    "road",
-    " rd.",
-    "avenue",
-    " ave.",
-    "boulevard",
-    " blvd.",
-    "suite",
-    " ste.",
-    "floor",
-    "building",
-    "po box",
-    "postal code",
-    "zip code",
-  ];
-  const hasAddress = ADDRESS_TERMS.some((term) =>
-    combinedDomText.includes(term)
-  );
-
-  if (hasAddress) {
+  // ── Now powered by GPT-4o-mini NER (falls back to keyword check if no API key) ──
+  if (aiAddressResult.pass) {
     passedChecks++;
   } else {
     issues.push({
@@ -573,12 +563,12 @@ interface StorefrontProduct {
       severity: "WARNING",
       ruleCode: "PHYSICAL_ADDRESS_VISIBLE",
       title: "Physical business address not displayed",
-      description:
-        "No physical business address was detected in your footer, contact page, or terms of service.",
+      description: `AI analysis: ${aiAddressResult.reason}`,
       fixGuide:
         "Add your registered business address to your footer or Contact Us page.",
     });
   }
+
 
   // Check 10: Business name on storefront matches legal name in Shopify settings
   const shopLegalName = (shopData?.name || "").toLowerCase().trim();
@@ -731,47 +721,25 @@ interface StorefrontProduct {
   }
 
   // Check 15: Product descriptions flagged for risky promotional language
-  const RISKY_SUPERLATIVES = [
-    "best deal ever",
-    "lowest price guaranteed",
-    "guaranteed lowest price",
-    "100% satisfaction guaranteed",
-    "miracle cure",
-    "100% cure",
-    "unbeatable price",
-    "risk free",
-    "number 1 in the world",
-    "cheapest on the internet",
-    "guaranteed weight loss",
-  ];
-
-  let riskyProductsCount = 0;
-  const flaggedDetails: string[] = [];
-
-  for (const product of products) {
-    const textToScan = `${product.title} ${product.descriptionHtml}`.toLowerCase();
-    for (const term of RISKY_SUPERLATIVES) {
-      if (textToScan.includes(term)) {
-        riskyProductsCount++;
-        flaggedDetails.push(`"${term}" in ${product.title}`);
-        break;
-      }
-    }
-  }
-
-  if (riskyProductsCount === 0) {
+  // ── Now powered by GPT-4o-mini (falls back to keyword list if no API key) ──
+  if (aiClaimsResult.pass) {
     passedChecks++;
   } else {
+    const flaggedSummary = aiClaimsResult.flagged
+      .slice(0, 3)
+      .map((f) => `"${f.claim}" in ${f.product}`)
+      .join("; ");
     issues.push({
       category: "AUP_RISK",
       severity: "WARNING",
       ruleCode: "RISKY_PROMOTIONAL_LANGUAGE",
-      title: `${riskyProductsCount} products contain unverifiable promotional claims`,
-      description: `Detected high-risk superlatives (${flaggedDetails.slice(0, 3).join(", ")}). Unverifiable claims violate Google Misrepresentation and Shopify AUP.`,
+      title: `${aiClaimsResult.flagged.length} products contain unverifiable promotional claims`,
+      description: `AI analysis: ${aiClaimsResult.reason}${flaggedSummary ? ` Flagged: ${flaggedSummary}.` : ""}`,
       fixGuide:
-        "Edit affected product descriptions and remove superlatives like 'guaranteed', 'best deal ever', or absolute medical claims.",
+        "Edit affected product descriptions and remove unverifiable guarantees, absolute medical claims, or competitor disparagement.",
     });
   }
+
 
   // Check 16: Product availability status accurate (in-stock/out-of-stock matches actual inventory)
   let availabilityMismatch = false;

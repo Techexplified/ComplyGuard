@@ -1,14 +1,14 @@
-import { useState, useEffect, useRef } from "react";
+﻿import { useState, useEffect, useRef } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
   LoaderFunctionArgs,
 } from "react-router";
 import {
-  Link,
   useFetcher,
   useLoaderData,
   useLocation,
+  useNavigate,
   useRouteError,
 } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -16,31 +16,25 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { runStorefrontComplianceScan } from "../service/scanner.server";
 
+// ─── Server ──────────────────────────────────────────────────────────────────
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopDomain = session.shop;
-
-  const shopRecord = await prisma.shop.findUnique({
-    where: { shopDomain },
-  });
-
+  const shopRecord = await prisma.shop.findUnique({ where: { shopDomain } });
   return { shop: shopDomain, shopRecord };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin, session } = await authenticate.admin(request);
   const shopDomain = session.shop;
-
   try {
-    // Run the real 18-check compliance scan against storefront & admin API
     const scanResult = await runStorefrontComplianceScan({ admin, shopDomain });
-
     return {
       success: true,
       score: scanResult.score,
       passedChecks: scanResult.passedChecks,
       totalChecks: scanResult.totalChecks,
-      issuesCount: scanResult.issues.length,
       issues: scanResult.issues,
     };
   } catch (error) {
@@ -52,42 +46,236 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   }
 };
 
-const CHECKS = [
-  {
-    id: "POLICY",
-    label: "Refund, Privacy, and Terms of Service policies",
-    threshold: 25,
-  },
-  {
-    id: "IDENTITY",
-    label: "Merchant contact details and support email",
-    threshold: 50,
-  },
-  {
-    id: "PRODUCT_FEED",
-    label: "Product feed data, GTINs, and risky claim triggers",
-    threshold: 75,
-  },
-  {
-    id: "TRUST_SIGNALS",
-    label: "Storefront theme embed and payment trust badges",
-    threshold: 95,
-  },
-];
+// ─── All 18 checks (mirrors scanner.server.ts exactly) ───────────────────────
+
+const ALL_CHECKS = [
+  { ruleCode: "REFUND_POLICY_EXISTS",               label: "Refund/return policy page exists" },
+  { ruleCode: "REFUND_POLICY_DISCLOSURE_INCOMPLETE",label: "Refund policy disclosure quality" },
+  { ruleCode: "SHIPPING_POLICY_EXISTS",              label: "Shipping policy page exists" },
+  { ruleCode: "PRIVACY_POLICY_EXISTS",               label: "Privacy policy page exists" },
+  { ruleCode: "TERMS_POLICY_EXISTS",                 label: "Terms of service page exists" },
+  { ruleCode: "POLICIES_NOT_IN_FOOTER",              label: "Policies linked in storefront footer" },
+  { ruleCode: "PHONE_NUMBER_VISIBLE",                label: "Phone number visible on storefront" },
+  { ruleCode: "EMAIL_OR_FORM_VISIBLE",               label: "Email or contact form present" },
+  { ruleCode: "PHYSICAL_ADDRESS_VISIBLE",            label: "Physical business address detected" },
+  { ruleCode: "BUSINESS_NAME_MISMATCH",              label: "Business name matches Shopify settings" },
+  { ruleCode: "MERCHANT_CENTER_ADDRESS_VERIFY",      label: "Address matches Merchant Center" },
+  { ruleCode: "MISSING_GTIN_BARCODE",                label: "Products have GTIN / barcodes" },
+  { ruleCode: "PRICE_MISMATCH_FEED",                 label: "Storefront prices match product feed" },
+  { ruleCode: "MISSING_PRODUCT_IMAGES",              label: "All active products have images" },
+  { ruleCode: "RISKY_PROMOTIONAL_LANGUAGE",          label: "No deceptive product claims" },
+  { ruleCode: "INVENTORY_AVAILABILITY_MISMATCH",     label: "Inventory availability is accurate" },
+  { ruleCode: "PAYMENT_METHODS_NOT_VISIBLE",         label: "Payment methods displayed in footer" },
+  { ruleCode: "SSL_SECURE_CHECKOUT",                 label: "Active SSL / secure checkout" },
+] as const;
+
+// How far pct must advance for each check to be considered "done" (0-92%)
+const CHECK_THRESHOLDS = ALL_CHECKS.map((_, i) =>
+  Math.round(((i + 1) / ALL_CHECKS.length) * 92)
+);
+
+const ROW_HEIGHT = 46; // px — fixed row height for slide animation
+const VISIBLE    = 4;  // rows shown at one time
+
+// ─── Styles (exact match of the reference design) ────────────────────────────
+
+const css = `
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  :root{
+    --ink:#1c1a18;
+    --ink-soft:#6b6560;
+    --ink-faint:#a39c95;
+    --canvas:#f1efe9;
+    --surface:#ffffff;
+    --line:#e6e1d9;
+    --accent:#e2610c;
+    --accent-deep:#a8430a;
+    --disp:'Space Grotesk',sans-serif;
+    --body:'Inter',sans-serif;
+    --mono:'JetBrains Mono',monospace;
+  }
+  *{box-sizing:border-box;}
+
+  .cg-wrap{
+    margin:0;
+    background:
+      radial-gradient(circle at 15% 0%,#f7f5ef 0%,transparent 55%),
+      var(--canvas);
+    font-family:var(--body);
+    color:var(--ink);
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    min-height:100vh;
+    padding:28px 14px;
+    overflow-x:auto;
+  }
+
+  .cg-shell{
+    width:920px;min-width:920px;max-width:920px;
+    background:var(--surface);
+    border-radius:20px;
+    border:1px solid var(--line);
+    box-shadow:0 20px 50px -20px rgba(28,26,24,.18);
+    overflow:hidden;
+    min-height:580px;
+    display:flex;flex-direction:column;
+  }
+
+  .cg-topbar{
+    display:flex;align-items:center;gap:9px;
+    padding:22px 30px;border-bottom:1px solid var(--line);
+  }
+  .cg-brand-mark{
+    width:22px;height:22px;border-radius:6px;
+    background:var(--accent);
+    display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono);font-size:11px;font-weight:600;color:#fff;
+  }
+  .cg-brand-name{
+    font-family:var(--disp);font-weight:600;font-size:14.5px;letter-spacing:-.01em;
+  }
+
+  .cg-stage{
+    flex:1;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;
+    padding:40px 30px 46px;
+  }
+
+  /* ── Rings ── */
+  .cg-rings{
+    position:relative;width:220px;height:220px;
+    display:flex;align-items:center;justify-content:center;
+    margin-bottom:30px;
+  }
+  .cg-ring{
+    position:absolute;border-radius:50%;
+    border:1.5px solid var(--accent);opacity:0;
+    animation:cgPulse 2.4s cubic-bezier(.2,.6,.35,1) infinite;
+  }
+  .cg-ring.r1{animation-delay:0s;}
+  .cg-ring.r2{animation-delay:.6s;}
+  .cg-ring.r3{animation-delay:1.2s;}
+  .cg-ring.r4{animation-delay:1.8s;}
+  @keyframes cgPulse{
+    0%  {width:70px;height:70px;opacity:.55;border-width:1.5px;}
+    100%{width:220px;height:220px;opacity:0;border-width:.5px;}
+  }
+  .cg-core{
+    position:relative;z-index:2;
+    width:70px;height:70px;border-radius:50%;
+    background:var(--ink);
+    display:flex;align-items:center;justify-content:center;
+    box-shadow:0 8px 24px -6px rgba(28,26,24,.35);
+    transition:background .4s ease;
+  }
+  .cg-core.done{background:var(--accent);}
+  .cg-core-mark{
+    font-family:var(--mono);font-size:15px;font-weight:600;color:var(--accent);
+    transition:color .4s ease;
+  }
+  .cg-core.done .cg-core-mark{color:#fff;font-size:22px;}
+
+  .cg-pct{
+    font-family:var(--disp);font-size:15px;font-weight:600;
+    color:var(--ink-soft);margin-bottom:6px;
+    font-variant-numeric:tabular-nums;
+  }
+  .cg-status-line{
+    font-size:16px;font-weight:500;color:var(--ink);
+    margin-bottom:2px;min-height:24px;text-align:center;
+  }
+  .cg-status-sub{
+    font-family:var(--mono);font-size:11px;color:var(--ink-faint);
+    letter-spacing:.04em;margin-bottom:34px;
+  }
+
+  /* ── Sliding checklist ── */
+  .cg-checklist-viewport{
+    width:100%;max-width:380px;
+    overflow:hidden;
+    /* height set inline = VISIBLE * ROW_HEIGHT */
+  }
+  .cg-checklist-track{
+    /* transform & transition set inline */
+    will-change:transform;
+  }
+  .cg-check-row{
+    display:flex;align-items:center;gap:11px;
+    padding:0 4px;
+    border-bottom:1px solid var(--line);
+    font-size:13px;color:var(--ink-faint);
+    transition:color .3s ease;
+    /* height set inline */
+  }
+  .cg-check-row:last-child{border-bottom:none;}
+  .cg-check-row.done   {color:var(--ink);}
+  .cg-check-row.active {color:var(--ink);}
+  .cg-check-row.passed {color:var(--ink);}
+  .cg-check-row.failed {color:var(--ink);}
+
+  .cg-mark{
+    width:18px;height:18px;border-radius:50%;
+    border:1.5px solid var(--line);
+    flex-shrink:0;
+    display:flex;align-items:center;justify-content:center;
+    font-size:10px;color:transparent;
+    transition:all .3s ease;
+  }
+  .cg-check-row.done   .cg-mark{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .cg-check-row.passed .cg-mark{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .cg-check-row.failed .cg-mark{background:#ef4444;border-color:#ef4444;color:#fff;}
+  .cg-check-row.active .cg-mark{border-color:var(--accent);border-width:2px;}
+  .cg-dot{width:6px;height:6px;border-radius:50%;background:var(--accent);}
+
+  .cg-note{
+    font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);
+    margin-top:26px;text-align:center;
+  }
+
+  /* Error */
+  .cg-error{
+    background:#fff0f0;border:1px solid #fca5a5;border-radius:12px;
+    padding:16px 20px;font-size:13px;color:#b91c1c;
+    max-width:380px;width:100%;text-align:left;margin-bottom:20px;
+  }
+  .cg-retry-btn{
+    margin-top:10px;background:#b91c1c;color:#fff;border:none;
+    border-radius:8px;padding:8px 18px;font-size:13px;font-weight:600;
+    cursor:pointer;transition:background .2s;
+  }
+  .cg-retry-btn:hover{background:#991b1b;}
+
+  /* Countdown */
+  .cg-countdown{
+    width:100%;max-width:380px;height:2px;
+    background:var(--line);border-radius:2px;overflow:hidden;margin-bottom:8px;
+  }
+  .cg-countdown-fill{height:100%;background:var(--accent);border-radius:2px;transition:width 1s linear;}
+  .cg-countdown-label{
+    font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);text-align:center;
+  }
+`;
+
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ScanningPage() {
   const { shop } = useLoaderData<typeof loader>();
-  const location = useLocation();
-  const fetcher = useFetcher<typeof action>();
+  const location  = useLocation();
+  const navigate  = useNavigate();
+  const fetcher   = useFetcher<typeof action>();
 
-  const [progress, setProgress] = useState(15);
-  const [currentStatusText, setCurrentStatusText] = useState(
-    "Connecting to storefront & compliance engine..."
-  );
+  const [pct, setPct]               = useState(0);
+  const [renderStart, setRenderStart] = useState(0);   // first index currently rendered
+  const [isSliding, setIsSliding]   = useState(false); // sliding animation in progress
+  const [countdown, setCountdown]   = useState<number | null>(null);
 
   const hasTriggeredRef = useRef(false);
+  const slidingRef      = useRef(false);
+  const pctTimerRef     = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 1. Trigger the real scan automatically as soon as the page loads!
+  // 1. Auto-trigger scan on mount
   useEffect(() => {
     if (!hasTriggeredRef.current && fetcher.state === "idle" && !fetcher.data) {
       hasTriggeredRef.current = true;
@@ -95,259 +283,210 @@ export default function ScanningPage() {
     }
   }, [fetcher]);
 
-  // 2. Smoothly animate progress bar while the backend scan executes
+  // 2. Advance pct counter (holds at 92 until backend returns)
   useEffect(() => {
-    const isScanComplete = Boolean(fetcher.data?.success);
-
-    const interval = setInterval(() => {
-      setProgress((prev) => {
-        // Hold at 90% if backend scan hasn't responded yet
-        if (!isScanComplete && prev >= 90) {
-          return 90;
-        }
-
-        if (prev >= 100) {
-          clearInterval(interval);
-          return 100;
-        }
-
-        const increment = isScanComplete
-          ? 6
-          : Math.floor(Math.random() * 5) + 3;
-        const next = Math.min(prev + increment, isScanComplete ? 100 : 90);
-
-        if (next < 30) {
-          setCurrentStatusText("Checking refund policy and legal footer links...");
-        } else if (next < 60) {
-          setCurrentStatusText(
-            "Verifying merchant contact information and physical address..."
-          );
-        } else if (next < 85) {
-          setCurrentStatusText(
-            "Scanning catalog feeds and analyzing product descriptions..."
-          );
-        } else if (next < 100) {
-          setCurrentStatusText(
-            "Inspecting storefront embed visibility and trust badges..."
-          );
-        } else {
-          setCurrentStatusText(
-            fetcher.data?.score !== undefined
-              ? `Scan complete! Store compliance health score: ${fetcher.data.score}/100`
-              : "Scan complete! Compiling compliance health score..."
-          );
-        }
-
-        return next;
+    pctTimerRef.current = setInterval(() => {
+      setPct((prev) => {
+        const done = Boolean(fetcher.data?.success);
+        if (!done && prev >= 92) return 92;
+        if (prev >= 100) { clearInterval(pctTimerRef.current!); return 100; }
+        return Math.min(prev + (done ? 4 : 1.2), done ? 100 : 92);
       });
-    }, 250);
-
-    return () => clearInterval(interval);
+    }, 120);
+    return () => clearInterval(pctTimerRef.current!);
   }, [fetcher.data]);
 
-  const scanData = fetcher.data;
-  const isFinished = Boolean(scanData?.success) && progress >= 100;
-  const hasError = fetcher.data && !fetcher.data.success;
+  // Derive which check index is currently "active"
+  const rawActiveIdx    = CHECK_THRESHOLDS.findIndex((t) => pct < t);
+  const activeCheckIdx  = rawActiveIdx === -1 ? ALL_CHECKS.length : rawActiveIdx;
+
+  // Target window start: 1 completed row above the active check, clamped to list bounds
+  const targetWindowStart = Math.max(
+    0,
+    Math.min(activeCheckIdx - 1, ALL_CHECKS.length - VISIBLE)
+  );
+
+  // 3. Slide animation when window needs to advance
+  useEffect(() => {
+    if (targetWindowStart > renderStart && !slidingRef.current) {
+      slidingRef.current = true;
+      setIsSliding(true);
+      const t = setTimeout(() => {
+        setRenderStart((prev) => prev + 1);
+        setIsSliding(false);
+        slidingRef.current = false;
+      }, 380);
+      return () => clearTimeout(t);
+    }
+  }, [targetWindowStart, renderStart]);
+
+  const isFinished = Boolean(fetcher.data?.success) && pct >= 100;
+  const hasError   = fetcher.data && !fetcher.data.success;
+
+  // 4. Auto-redirect countdown (3 s after scan finishes)
+  useEffect(() => {
+    if (!isFinished) return;
+    setCountdown(3);
+    const t = setInterval(() => {
+      setCountdown((c) => {
+        if (c === null || c <= 1) {
+          clearInterval(t);
+          navigate(`/app${location.search}`);
+          return 0;
+        }
+        return c - 1;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, [isFinished, navigate, location.search]);
+
+  // Build set of failed ruleCode from actual scan result
+  const failedCodes = new Set(
+    (fetcher.data?.issues ?? []).map((i: { ruleCode: string }) => i.ruleCode)
+  );
+
+  // Determine visual state of a check by its global index
+  const getState = (idx: number): "pending" | "active" | "done" | "passed" | "failed" => {
+    if (fetcher.data?.success) {
+      return failedCodes.has(ALL_CHECKS[idx].ruleCode) ? "failed" : "passed";
+    }
+    if (idx < activeCheckIdx) return "done";
+    if (idx === activeCheckIdx) return "active";
+    return "pending";
+  };
+
+  // Items to render: VISIBLE + 1 during slide so bottom item slides in
+  const itemsToRender = ALL_CHECKS.slice(
+    renderStart,
+    renderStart + VISIBLE + (isSliding ? 1 : 0)
+  );
+
+  // Status line text
+  const statusText = isFinished
+    ? `Scan complete — compliance score ${fetcher.data?.score ?? "—"}/100`
+    : activeCheckIdx < ALL_CHECKS.length
+    ? `Checking: ${ALL_CHECKS[activeCheckIdx].label}…`
+    : "Saving results to database…";
 
   return (
-    <div className="min-h-screen bg-[#f4f4f5] text-zinc-900 flex flex-col items-center justify-center p-4 sm:p-6 antialiased font-sans">
-      <div className="w-full max-w-2xl bg-white rounded-2xl border border-zinc-200 p-6 sm:p-10 shadow-[0_10px_30px_-10px_rgba(0,0,0,0.08),0_4px_6px_-2px_rgba(0,0,0,0.03)] text-center">
-        {/* Animated Scanner Pulse / Radar */}
-        <div className="relative w-20 h-20 mx-auto mb-6 flex items-center justify-center">
-          <div
-            className={`absolute inset-0 rounded-full bg-[#faeae3] transition-transform duration-1000 ${
-              isFinished ? "scale-100" : "animate-ping opacity-60"
-            }`}
-          />
-          <div className="relative w-16 h-16 rounded-full bg-[#faeae3] flex items-center justify-center text-[#f05423]">
-            {isFinished ? (
-              <svg
-                width="30"
-                height="30"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="#c25e37"
-                strokeWidth="3"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <polyline points="20 6 9 17 4 12" />
-              </svg>
-            ) : (
-              <svg
-                className="animate-spin text-[#f05423]"
-                width="28"
-                height="28"
-                viewBox="0 0 24 24"
-                fill="none"
-              >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="3.5"
-                />
-                <path
-                  className="opacity-90"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"
-                />
-              </svg>
-            )}
-          </div>
-        </div>
+    <>
+      <style dangerouslySetInnerHTML={{ __html: css }} />
+      <div className="cg-wrap">
+        <div className="cg-shell">
 
-        {/* Eyebrow */}
-        <div className="text-xs font-bold tracking-[1.5px] text-[#c25e37] uppercase mb-2">
-          {isFinished ? "READY" : "AUTOMATED SCAN IN PROGRESS"}
-        </div>
+          {/* ── Topbar ── */}
+          {/* <div className="cg-topbar">
+            <div className="cg-brand-mark">CG</div>
+            <div className="cg-brand-name">ComplyGuard</div>
+          </div> */}
 
-        {/* Title */}
-        <h1 className="text-2xl sm:text-3xl font-bold text-zinc-900 tracking-tight leading-tight mb-2">
-          {isFinished ? "Store scan completed!" : "Scanning your store"}
-        </h1>
+          {/* ── Stage ── */}
+          <div className="cg-stage">
 
-        {/* Subtitle */}
-        <p className="text-sm text-zinc-600 max-w-md mx-auto mb-6">
-          {isFinished
-            ? `Baseline established for ${shop}. Score: ${scanData?.score}/100 (${scanData?.passedChecks}/${scanData?.totalChecks} checks passed).`
-            : `Running 18 compliance and policy checks across ${shop}...`}
-        </p>
-
-        {/* Progress Bar Container */}
-        <div className="w-full bg-zinc-100 rounded-full h-3 overflow-hidden mb-3 border border-zinc-200/80">
-          <div
-            className="h-full bg-[#f05423] transition-all duration-300 ease-out"
-            style={{ width: `${progress}%` }}
-          />
-        </div>
-
-        <div className="flex items-center justify-between text-xs text-zinc-500 font-mono mb-8 px-1">
-          <span>{currentStatusText}</span>
-          <span className="font-semibold text-zinc-800">{progress}%</span>
-        </div>
-
-        {/* Live Checklist Breakdown */}
-        <div className="bg-[#fafafa] border border-zinc-200/80 rounded-xl p-4 sm:p-5 text-left mb-8 space-y-3">
-          {CHECKS.map((check) => {
-            const isCompleted = progress >= check.threshold;
-            const isCurrent =
-              progress < check.threshold &&
-              progress >= check.threshold - 25;
-
-            // Check if there are any issues for this category from real scan
-            const categoryIssues = (scanData?.issues || []).filter(
-              (i) => i.category === check.id
-            );
-            const hasIssue = isCompleted && categoryIssues.length > 0;
-
-            return (
-              <div
-                key={check.id}
-                className="flex items-center justify-between text-xs sm:text-[13px]"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div
-                    className={`w-4.5 h-4.5 rounded-full flex items-center justify-center shrink-0 ${
-                      isCompleted
-                        ? hasIssue
-                          ? "bg-amber-100 text-amber-700"
-                          : "bg-[#faeae3] text-[#c25e37]"
-                        : isCurrent
-                        ? "bg-amber-100 text-amber-700 animate-pulse"
-                        : "bg-zinc-200 text-zinc-400"
-                    }`}
-                  >
-                    {isCompleted ? (
-                      hasIssue ? (
-                        <span className="text-[10px] font-bold">!</span>
-                      ) : (
-                        <svg
-                          width="10"
-                          height="10"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="#c25e37"
-                          strokeWidth="3.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <polyline points="20 6 9 17 4 12" />
-                        </svg>
-                      )
-                    ) : (
-                      <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                    )}
-                  </div>
-                  <span
-                    className={`font-medium ${
-                      isCompleted
-                        ? "text-zinc-800"
-                        : isCurrent
-                        ? "text-zinc-900 font-semibold"
-                        : "text-zinc-400"
-                    }`}
-                  >
-                    {check.label}
-                  </span>
-                </div>
-
-                <span
-                  className={`font-mono text-[11px] ${
-                    isCompleted
-                      ? hasIssue
-                        ? "text-amber-700 font-medium"
-                        : "text-[#c25e37] font-semibold"
-                      : isCurrent
-                      ? "text-amber-600 font-medium"
-                      : "text-zinc-400"
-                  }`}
-                >
-                  {isCompleted
-                    ? hasIssue
-                      ? `${categoryIssues.length} issue${categoryIssues.length > 1 ? "s" : ""}`
-                      : "Passed ✓"
-                    : isCurrent
-                    ? "Checking..."
-                    : "Pending"}
-                </span>
+            {/* Rings */}
+            <div className="cg-rings">
+              {!isFinished && (
+                <>
+                  <div className="cg-ring r1" />
+                  <div className="cg-ring r2" />
+                  <div className="cg-ring r3" />
+                  <div className="cg-ring r4" />
+                </>
+              )}
+              <div className={`cg-core${isFinished ? " done" : ""}`}>
+                <span className="cg-core-mark">{isFinished ? "✓" : "CG"}</span>
               </div>
-            );
-          })}
-        </div>
+            </div>
 
-        {/* Error State */}
-        {hasError && (
-          <div className="mb-6 p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs">
-            <p className="font-semibold mb-1">Scan Error:</p>
-            <p className="mb-3">{fetcher.data?.error}</p>
-            <button
-              type="button"
-              onClick={() => fetcher.submit({}, { method: "POST" })}
-              className="px-4 py-1.5 rounded-lg bg-red-600 text-white font-medium hover:bg-red-700 transition cursor-pointer"
+            {/* Percent */}
+            <div className="cg-pct">{Math.round(pct)}%</div>
+
+            {/* Status */}
+            <div className="cg-status-line">{statusText}</div>
+            <div className="cg-status-sub">
+              {isFinished
+                ? `${fetcher.data?.passedChecks ?? 0} of 18 passed · ${(fetcher.data?.issues ?? []).length} issues found`
+                : "Read-only · nothing changes on your store"}
+            </div>
+
+            {/* Error */}
+            {hasError && (
+              <div className="cg-error">
+                <strong>Scan error:</strong> {fetcher.data?.error}
+                <br />
+                <button
+                  type="button"
+                  className="cg-retry-btn"
+                  onClick={() => {
+                    hasTriggeredRef.current = false;
+                    setPct(0);
+                    setRenderStart(0);
+                    fetcher.submit({}, { method: "POST" });
+                  }}
+                >
+                  Retry scan
+                </button>
+              </div>
+            )}
+
+            {/* ── Sliding 4-row checklist ── */}
+            <div
+              className="cg-checklist-viewport"
+              style={{ height: VISIBLE * ROW_HEIGHT }}
             >
-              Retry Scan
-            </button>
-          </div>
-        )}
+              <div
+                className="cg-checklist-track"
+                style={{
+                  transform: `translateY(${isSliding ? -ROW_HEIGHT : 0}px)`,
+                  transition: isSliding
+                    ? "transform 0.38s cubic-bezier(0.4,0,0.2,1)"
+                    : "none",
+                }}
+              >
+                {itemsToRender.map((check, localIdx) => {
+                  const globalIdx = renderStart + localIdx;
+                  const state = getState(globalIdx);
+                  return (
+                    <div
+                      key={globalIdx}
+                      className={`cg-check-row ${state}`}
+                      style={{ height: ROW_HEIGHT }}
+                    >
+                      <div className="cg-mark">
+                        {state === "active"  && <span className="cg-dot" />}
+                        {(state === "done" || state === "passed") && "✓"}
+                        {state === "failed"  && "✗"}
+                      </div>
+                      {check.label}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
 
-        {/* Action Button */}
-        {isFinished ? (
-          <Link
-            to={`/app${location.search}`}
-            className="w-full bg-[#f05423] hover:bg-[#d94819] active:scale-[0.99] text-white font-semibold text-base py-3.5 rounded-xl transition shadow-sm block text-center cursor-pointer"
-          >
-            View Dashboard →
-          </Link>
-        ) : (
-          <p className="text-xs text-zinc-400 font-mono">
-            Read-only scan • Changes nothing on your store
-          </p>
-        )}
+            {/* Bottom note / countdown */}
+            {isFinished && countdown !== null ? (
+              <>
+                <div className="cg-countdown">
+                  <div
+                    className="cg-countdown-fill"
+                    style={{ width: `${((3 - countdown) / 3) * 100}%` }}
+                  />
+                </div>
+                <div className="cg-countdown-label">
+                  Redirecting to dashboard in {countdown}s…
+                </div>
+              </>
+            ) : (
+              <div className="cg-note">
+                Scanning 18 checks · this usually takes under a minute
+              </div>
+            )}
+
+          </div>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
