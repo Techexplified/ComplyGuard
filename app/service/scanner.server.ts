@@ -254,59 +254,137 @@ interface StorefrontProduct {
   const $home = cheerio.load(homepageHtml);
   const $contact = cheerio.load(contactPageHtml);
 
-  // Helper to fetch and inspect policy pages
-  async function fetchPolicy(slug: string): Promise<{
+  // ─────────────────────────────────────────────────────────────────────────
+  // Helper: fetch a single URL and return { exists, html, text }
+  // Returns exists=false for non-200 responses or pages that look like 404 templates.
+  // ─────────────────────────────────────────────────────────────────────────
+  async function fetchUrl(url: string): Promise<{
     exists: boolean;
     html: string;
     text: string;
   }> {
-    const policyUrl = `${storeUrl}/policies/${slug}`;
     try {
-      const res = await fetch(policyUrl, {
-        headers: storefrontHeaders,
-      });
+      const res = await fetch(url, { headers: storefrontHeaders });
       if (!res.ok) {
-        console.log(`[Policy Fetch] ${policyUrl} returned HTTP status ${res.status}`);
+        console.log(`[Policy Fetch] ${url} returned HTTP ${res.status}`);
         return { exists: false, html: "", text: "" };
       }
       const html = await res.text();
-      console.log(
-        `\n============================================================\n` +
-        `[FETCHED POLICY HTML] Slug: ${slug} | URL: ${policyUrl} (${html.length} characters)\n` +
-        `============================================================`
-      );
-      console.log(html);
-      console.log(`==================== [END POLICY HTML: ${slug}] ====================\n`);
-
       const $p = cheerio.load(html);
       const title = $p("title").text().toLowerCase();
       const h1Text = $p("h1, h2").first().text().toLowerCase();
       const bodyText = $p("body").text().trim();
-
       const is404 =
         title.includes("404") ||
         title.includes("page not found") ||
         h1Text.includes("404") ||
         h1Text.includes("page not found") ||
         bodyText.length < 50;
-
-      if (is404) {
-        console.log(`[Policy Fetch] Policy ${slug} identified as 404/empty template.`);
-        return { exists: false, html: "", text: "" };
-      }
+      if (is404) return { exists: false, html: "", text: "" };
       return { exists: true, html, text: bodyText };
     } catch (err) {
-      console.error(`[Policy Fetch] Failed to fetch policy at ${policyUrl}:`, err);
+      console.error(`[Policy Fetch] Failed to fetch ${url}:`, err);
       return { exists: false, html: "", text: "" };
     }
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Smart Policy Finder (3 stages, no AI)
+  //
+  //  Stage 1 — Native Shopify route: /policies/<slug>
+  //  Stage 2 — Footer link discovery: scan <a> tags already in $home DOM
+  //            for hrefs or anchor text matching the policy keywords
+  //  Stage 3 — Common fallback slugs: probe a short list of /pages/* paths
+  //
+  // The function returns on the first stage that succeeds.
+  // ─────────────────────────────────────────────────────────────────────────
+  async function fetchPolicy(
+    slug: string,
+    keywords: string[],
+    fallbackSlugs: string[]
+  ): Promise<{ exists: boolean; html: string; text: string }> {
+
+    // ── Stage 1: native /policies/<slug> ──────────────────────────────────
+    const nativeUrl = `${storeUrl}/policies/${slug}`;
+    console.log(`[Policy Fetch | Stage 1] Trying native route: ${nativeUrl}`);
+    const nativeResult = await fetchUrl(nativeUrl);
+    if (nativeResult.exists) {
+      console.log(`[Policy Fetch | Stage 1] FOUND at ${nativeUrl}`);
+      return nativeResult;
+    }
+
+    // ── Stage 2: footer / homepage link discovery ─────────────────────────
+    console.log(`[Policy Fetch | Stage 2] Scanning homepage links for keywords: ${keywords.join(", ")}`);
+    const discoveredUrls = new Set<string>();
+
+    $home("a").each((_, el) => {
+      const href = ($home(el).attr("href") || "").toLowerCase();
+      const text = $home(el).text().toLowerCase();
+      const matchesKeyword = keywords.some(
+        (kw) => href.includes(kw) || text.includes(kw)
+      );
+      if (matchesKeyword) {
+        const rawHref = $home(el).attr("href") || "";
+        // Only follow internal links (relative or same-domain)
+        if (rawHref.startsWith("/") || rawHref.startsWith(storeUrl)) {
+          const absolute = rawHref.startsWith("/")
+            ? `${storeUrl}${rawHref}`
+            : rawHref;
+          discoveredUrls.add(absolute);
+        }
+      }
+    });
+
+    for (const url of discoveredUrls) {
+      console.log(`[Policy Fetch | Stage 2] Probing discovered link: ${url}`);
+      const result = await fetchUrl(url);
+      if (result.exists) {
+        console.log(`[Policy Fetch | Stage 2] FOUND at ${url}`);
+        return result;
+      }
+    }
+
+    // ── Stage 3: common /pages/* slug probing ─────────────────────────────
+    for (const fallback of fallbackSlugs) {
+      const url = `${storeUrl}/pages/${fallback}`;
+      console.log(`[Policy Fetch | Stage 3] Probing fallback slug: ${url}`);
+      const result = await fetchUrl(url);
+      if (result.exists) {
+        console.log(`[Policy Fetch | Stage 3] FOUND at ${url}`);
+        return result;
+      }
+    }
+
+    console.log(`[Policy Fetch] Policy "${slug}" not found on any route.`);
+    return { exists: false, html: "", text: "" };
+  }
+
   const [refundData, privacyData, termsData, shippingData] =
     await Promise.all([
-      fetchPolicy("refund-policy"),
-      fetchPolicy("privacy-policy"),
-      fetchPolicy("terms-of-service"),
-      fetchPolicy("shipping-policy"),
+      // Refund / Return policy
+      fetchPolicy(
+        "refund-policy",
+        ["refund", "return", "exchange", "money-back"],
+        ["return-policy", "returns", "refund-policy", "refunds", "returns-exchanges", "return-exchange"]
+      ),
+      // Privacy policy
+      fetchPolicy(
+        "privacy-policy",
+        ["privacy", "data protection", "personal data"],
+        ["privacy-policy", "privacy", "data-privacy", "gdpr"]
+      ),
+      // Terms of service
+      fetchPolicy(
+        "terms-of-service",
+        ["terms", "conditions", "tos", "terms of service", "terms of use"],
+        ["terms", "terms-of-service", "terms-and-conditions", "tos", "terms-of-use"]
+      ),
+      // Shipping policy
+      fetchPolicy(
+        "shipping-policy",
+        ["shipping", "delivery", "dispatch", "transit"],
+        ["shipping", "shipping-policy", "delivery", "delivery-policy", "shipping-and-delivery"]
+      ),
     ]);
 
   // =============================================================

@@ -5,6 +5,8 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
+// --- Server Loader & Action --------------------------------------------------
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopDomain = session.shop;
@@ -12,7 +14,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   let shopRecord = await prisma.shop.findUnique({
     where: { shopDomain },
     include: {
-      scans: { orderBy: { createdAt: "desc" }, take: 10 },
+      scans: { orderBy: { createdAt: "desc" }, take: 20 },
       issues: { orderBy: [{ resolved: "asc" }, { severity: "asc" }, { createdAt: "desc" }] },
     },
   });
@@ -26,7 +28,7 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
         onBoarding: false,
       },
       include: {
-        scans: { orderBy: { createdAt: "desc" }, take: 10 },
+        scans: { orderBy: { createdAt: "desc" }, take: 20 },
         issues: { orderBy: [{ resolved: "asc" }, { severity: "asc" }, { createdAt: "desc" }] },
       },
     });
@@ -57,15 +59,32 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   if (intent === "toggle_issue") {
     const issueId = String(formData.get("issueId"));
     const currentResolved = formData.get("resolved") === "true";
+    const newResolved = !currentResolved;
+
     await prisma.issue.update({
       where: { id: issueId },
-      data: { resolved: !currentResolved },
+      data: { resolved: newResolved },
     });
-    return { ok: true };
+
+    // Real-time score recalculation based on remaining unresolved issues
+    const remainingUnresolved = await prisma.issue.count({
+      where: { shopId: session.shop, resolved: false },
+    });
+    const newPassed = Math.max(0, 18 - remainingUnresolved);
+    const newScore = Math.round((newPassed / 18) * 100);
+
+    await prisma.shop.update({
+      where: { shopDomain: session.shop },
+      data: { complianceScore: newScore },
+    });
+
+    return { ok: true, newScore };
   }
 
   return null;
 };
+
+// --- 18 Compliance Checks ----------------------------------------------------
 
 const ALL_18_CHECKS = [
   { ruleCode: "REFUND_POLICY_EXISTS", label: "Refund/return policy page exists", category: "POLICY", groupName: "Policy pages" },
@@ -92,7 +111,9 @@ const ALL_18_CHECKS = [
 ];
 
 function getShopifyDeepLink(ruleCode: string, shopDomain: string): string {
-  const base = `https://${shopDomain}/admin`;
+  const cleanDomain = shopDomain.replace(".myshopify.com", "");
+  const base = `https://admin.shopify.com/store/${cleanDomain}`;
+
   if (ruleCode.startsWith("REFUND") || ruleCode.startsWith("SHIPPING") || ruleCode.startsWith("PRIVACY") || ruleCode.startsWith("TERMS")) {
     return `${base}/settings/policies`;
   }
@@ -121,6 +142,32 @@ function timeAgo(dateInput?: Date | string | null): string {
   return `${days}d ago`;
 }
 
+function formatScanDates(dateInput: Date | string) {
+  const d = new Date(dateInput);
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = d.toDateString() === yesterday.toDateString();
+
+  const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const dateStr = `${monthNames[d.getMonth()]} ${d.getDate()}`;
+  const timeStr = d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+  let primary = dateStr;
+  let secondary = timeStr;
+
+  if (isToday) {
+    primary = "Today";
+    secondary = `${dateStr}, ${timeStr}`;
+  } else if (isYesterday) {
+    primary = "Yesterday";
+    secondary = timeStr;
+  }
+
+  return { primary, secondary, short: dateStr };
+}
+
 const css = `
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
@@ -128,7 +175,7 @@ const css = `
     --ink: #1c1a18;
     --ink-soft: #6b6560;
     --ink-faint: #a39c95;
-    --canvas: #f1efe9;
+    --canvas: #f1f1f1;
     --surface: #ffffff;
     --line: #e6e1d9;
     --accent: #e2610c;
@@ -143,18 +190,18 @@ const css = `
 
   .cg-dash-wrap {
     min-height: 100vh;
-    background: radial-gradient(circle at 15% 0%, #f7f5ef 0%, transparent 55%), var(--canvas);
+    background: #f1f1f1;
     font-family: var(--body);
     color: var(--ink);
     display: flex;
     justify-content: center;
-    padding: 32px 16px 80px;
+    padding: 32px 20px 80px;
+    box-sizing: border-box;
   }
 
   .cg-dash-shell {
-    width: 960px;
-    min-width: 960px;
-    max-width: 960px;
+    width: 100%;
+    max-width: 1080px;
     background: var(--surface);
     border-radius: 20px;
     border: 1px solid var(--line);
@@ -164,26 +211,28 @@ const css = `
     flex-direction: column;
   }
 
+  @media (max-width: 900px) {
+    .cg-dash-wrap { padding: 16px 12px 60px; }
+    .cg-dash-shell { border-radius: 14px; }
+    .cg-content { padding: 24px 20px 32px; gap: 24px; }
+    .cg-hero { flex-direction: column; align-items: flex-start; gap: 20px; }
+    .cg-hero-stats { align-self: flex-start; }
+    .cg-categories-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  @media (max-width: 580px) {
+    .cg-categories-grid { grid-template-columns: 1fr; }
+    .cg-hero-left { flex-direction: column; align-items: flex-start; gap: 16px; }
+    .cg-topbar { padding: 14px 20px; }
+    .cg-hist-row { flex-wrap: wrap; gap: 12px; }
+  }
+
   .cg-topbar {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 20px 32px;
+    justify-content: flex-end;
+    padding: 16px 32px;
     border-bottom: 1px solid var(--line);
-  }
-  .cg-brand {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .cg-brand-mark {
-    width: 24px; height: 24px; border-radius: 6px;
-    background: var(--accent);
-    display: flex; align-items: center; justify-content: center;
-    font-family: var(--mono); font-size: 11px; font-weight: 700; color: #fff;
-  }
-  .cg-brand-name {
-    font-family: var(--disp); font-weight: 700; font-size: 16px; letter-spacing: -.01em; color: var(--ink);
   }
   .cg-nav {
     display: flex;
@@ -201,9 +250,11 @@ const css = `
     cursor: pointer;
     background: transparent;
     border: none;
+    transition: all .2s;
   }
   .cg-nav-link.active {
     color: var(--ink);
+    font-weight: 700;
   }
   .cg-nav-pill {
     background: #f1efe9;
@@ -215,6 +266,14 @@ const css = `
     border-radius: 9px;
     border: 1px solid #e6e1d9;
     cursor: pointer;
+    transition: all .2s;
+  }
+  .cg-nav-pill.active {
+    background: #e6e1d9;
+    font-weight: 700;
+  }
+  .cg-nav-pill:hover {
+    background: #e9e6dd;
   }
 
   .cg-content {
@@ -411,19 +470,8 @@ const css = `
     background: #ecfdf5;
     color: #059669;
   }
-  .cg-issue-title {
-    font-weight: 600;
-    color: var(--ink);
-    white-space: nowrap;
-  }
-  .cg-issue-desc {
-    color: var(--ink-soft);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex: 1;
-    font-size: 12.5px;
-  }
+  .cg-issue-title { font-weight: 600; color: var(--ink); white-space: nowrap; background: none; border: none; padding: 0; font-family: inherit; font-size: inherit; cursor: pointer; text-align: left; }
+  .cg-issue-desc { color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; font-size: 12.5px; background: none; border: none; padding: 0; font-family: inherit; cursor: pointer; text-align: left; }
   .cg-issue-cat {
     font-family: var(--mono);
     font-size: 11px;
@@ -541,6 +589,152 @@ const css = `
     transform: translateY(-1px);
     box-shadow: 0 10px 24px -4px rgba(226, 97, 12, 0.45);
   }
+
+  /* Scan History Styles */
+  .cg-chart-card {
+    background: #ffffff;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    padding: 20px 24px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .cg-chart-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .cg-chart-label {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  .cg-chart-curr {
+    font-family: var(--body);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .cg-chart-curr span {
+    font-family: var(--disp);
+    font-weight: 700;
+    color: var(--accent);
+  }
+
+  .cg-hist-list {
+    display: flex;
+    flex-direction: column;
+  }
+  .cg-hist-row {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 16px 4px;
+    border-bottom: 1px solid var(--line);
+  }
+  .cg-hist-date {
+    width: 120px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .cg-hist-primary {
+    font-family: var(--body);
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .cg-hist-secondary {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-faint);
+  }
+  .cg-hist-badge {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--disp);
+    font-size: 15px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  .cg-hist-badge.drop {
+    border: 2px solid var(--accent);
+    color: var(--accent);
+  }
+  .cg-hist-badge.improved {
+    border: 2px solid #10b981;
+    color: #10b981;
+  }
+  .cg-hist-badge.neutral {
+    border: 2px solid #d1cec8;
+    color: var(--ink);
+  }
+
+  .cg-hist-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .cg-hist-title {
+    font-family: var(--body);
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .cg-hist-sub {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--ink-soft);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .cg-arr-down {
+    color: var(--accent);
+    font-weight: 600;
+  }
+  .cg-arr-up {
+    color: #10b981;
+    font-weight: 600;
+  }
+
+  .cg-pill-onboard {
+    background: #f1efe9;
+    color: var(--ink-soft);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    padding: 3px 8px;
+    border-radius: 6px;
+    flex-shrink: 0;
+  }
+  .cg-view-btn {
+    background: #ffffff;
+    border: 1px solid #d1cec8;
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 12.5px;
+    font-weight: 500;
+    padding: 6px 16px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all .15s;
+    flex-shrink: 0;
+  }
+  .cg-view-btn:hover {
+    background: #f7f5ef;
+    border-color: #b5b0a8;
+  }
 `;
 
 export default function DashboardPage() {
@@ -548,31 +742,39 @@ export default function DashboardPage() {
   const [activeTab, setActiveTab] = useState<"dashboard" | "history">("dashboard");
   const [showPassed, setShowPassed] = useState(false);
   const [expandedIssueId, setExpandedIssueId] = useState<string | null>(null);
+  const [expandedScanId, setExpandedScanId] = useState<string | null>(null);
 
+  const scans = shop.scans || [];
   const allIssues = shop.issues || [];
-  const score = shop.complianceScore;
+  const latestScan = scans[0];
 
-  const unresolvedIssues = allIssues.filter((i: any) => !i.resolved);
-  const resolvedIssues = allIssues.filter((i: any) => i.resolved);
+  const unresolvedIssues = allIssues.filter((i) => !i.resolved);
+  const resolvedIssues = allIssues.filter((i) => i.resolved);
 
-  const policyIssues = unresolvedIssues.filter((i: any) => i.category === "POLICY");
-  const identityIssues = unresolvedIssues.filter((i: any) => i.category === "IDENTITY");
-  const feedIssues = unresolvedIssues.filter((i: any) => i.category === "PRODUCT_FEED" || i.category === "AUP_RISK");
-  const trustIssues = unresolvedIssues.filter((i: any) => i.category === "TRUST_SIGNALS");
-
-  const policyPassed = Math.max(0, 6 - policyIssues.length);
-  const identityPassed = Math.max(0, 5 - identityIssues.length);
-  const feedPassed = Math.max(0, 5 - feedIssues.length);
-  const trustPassed = Math.max(0, 2 - trustIssues.length);
-
-  const totalPassed = policyPassed + identityPassed + feedPassed + trustPassed;
   const totalChecks = 18;
   const issuesFound = unresolvedIssues.length;
+  const totalPassed = Math.max(0, totalChecks - issuesFound);
 
+  // Derive score directly from live state / latest scan
+  const score = latestScan ? latestScan.score : Math.round((totalPassed / totalChecks) * 100);
+
+  // Category counts based on real unresolved issues
+  const policyIssues = unresolvedIssues.filter((i) => i.category === "POLICY").length;
+  const identityIssues = unresolvedIssues.filter((i) => i.category === "IDENTITY").length;
+  const feedIssues = unresolvedIssues.filter((i) => i.category === "PRODUCT_FEED" || i.category === "AUP_RISK").length;
+  const trustIssues = unresolvedIssues.filter((i) => i.category === "TRUST_SIGNALS").length;
+
+  const policyPassed = Math.max(0, 6 - policyIssues);
+  const identityPassed = Math.max(0, 5 - identityIssues);
+  const feedPassed = Math.max(0, 5 - feedIssues);
+  const trustPassed = Math.max(0, 2 - trustIssues);
+
+  // Circular gauge calculations
   const radius = 42;
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (score / 100) * circumference;
 
+  // Dynamic status messaging based on real score
   const eyebrowText =
     score >= 85 ? "READY TO CONNECT" : score >= 60 ? "NEEDS ATTENTION" : "CRITICAL RISKS";
   const headlineText =
@@ -582,10 +784,35 @@ export default function DashboardPage() {
   const descriptionText =
     score >= 85
       ? "All mandatory compliance policies and trust signals are active. Your store passes Google Merchant Center requirements."
-      : "Fix the high-priority issues below before connecting to Google Merchant Center � they're the most common cause of suspensions.";
+      : "Fix the high-priority issues below before connecting to Google Merchant Center they're the most common cause of suspensions.";
 
-  const failedCodes = new Set(unresolvedIssues.map((i: any) => i.ruleCode));
+  // Failed rule codes set for real passed checks breakdown
+  const failedCodes = new Set(unresolvedIssues.map((i) => i.ruleCode));
   const passedChecksList = ALL_18_CHECKS.filter((c) => !failedCodes.has(c.ruleCode));
+
+  // Chart data: up to 6 real scans, chronologically sorted (oldest -> newest)
+  const chartScans = [...scans].slice(0, 6).reverse();
+
+  // Dynamic SVG Y-scaling so differences are clearly visible
+  const svgWidth = 860;
+  const svgHeight = 90;
+  const padX = 40;
+  const padY = 20;
+
+  const minScore = chartScans.length > 0 ? Math.max(0, Math.min(...chartScans.map((s) => s.score)) - 10) : 0;
+  const maxScore = chartScans.length > 0 ? Math.min(100, Math.max(...chartScans.map((s) => s.score)) + 10) : 100;
+  const scoreRange = Math.max(15, maxScore - minScore);
+
+  const chartPoints = chartScans.map((s, idx) => {
+    const total = chartScans.length;
+    const x = total === 1 ? svgWidth / 2 : padX + (idx * (svgWidth - padX * 2)) / (total - 1);
+    const y = svgHeight - padY - (((s.score || 0) - minScore) / scoreRange) * (svgHeight - padY * 2);
+    const dateObj = formatScanDates(s.createdAt);
+    const label = idx === total - 1 ? `${dateObj.short} (now)` : dateObj.short;
+    return { x, y, score: s.score, label, id: s.id };
+  });
+
+  const pointsString = chartPoints.map((p) => `${p.x},${p.y}`).join(" ");
 
   return (
     <>
@@ -593,12 +820,8 @@ export default function DashboardPage() {
       <div className="cg-dash-wrap">
         <div className="cg-dash-shell">
 
-          {/* Top Bar */}
+          {/* Top Bar with right-aligned nav buttons */}
           <div className="cg-topbar">
-            {/* <div className="cg-brand">
-              <div className="cg-brand-mark">CG</div>
-              <div className="cg-brand-name">ComplyGuard</div>
-            </div> */}
             <div className="cg-nav">
               <button
                 type="button"
@@ -609,53 +832,186 @@ export default function DashboardPage() {
               </button>
               <button
                 type="button"
-                className="cg-nav-pill"
+                className={`cg-nav-pill ${activeTab === "history" ? "active" : ""}`}
                 onClick={() => setActiveTab(activeTab === "history" ? "dashboard" : "history")}
               >
-                {activeTab === "history" ? "? Back to Dashboard" : "Scan History"}
+                {activeTab === "history" ? "← Back to Dashboard" : "Scan History"}
               </button>
             </div>
           </div>
 
+          {/* -------------------- SCAN HISTORY VIEW -------------------- */}
           {activeTab === "history" ? (
             <div className="cg-content">
               <div>
-                <div className="cg-section-header">PAST COMPLIANCE AUDITS</div>
-                <h2 className="cg-headline" style={{ fontSize: 18, marginBottom: 16 }}>
-                  Scan History for {shop.shopDomain}
-                </h2>
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {(shop.scans || []).map((s: any) => (
-                    <div
-                      key={s.id}
-                      style={{
-                        padding: "14px 18px",
-                        background: "#fff",
-                        border: "1px solid #e6e1d9",
-                        borderRadius: 12,
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
-                      }}
-                    >
-                      <div>
-                        <span style={{ fontWeight: 600, fontSize: 14 }}>Score: {s.score}/100</span>
-                        <span style={{ color: "#a39c95", fontSize: 12, marginLeft: 12 }}>
-                          {new Date(s.createdAt).toLocaleString()}
-                        </span>
+                <div className="cg-eyebrow">SCAN HISTORY</div>
+                <h1 className="cg-headline" style={{ fontSize: 24, margin: "2px 0 0" }}>
+                  How your readiness has changed over time
+                </h1>
+              </div>
+
+              {/* Trend Chart Card */}
+              <div className="cg-chart-card">
+                <div className="cg-chart-top">
+                  <span className="cg-chart-label">
+                    READINESS SCORE � LAST {chartScans.length || 1} SCANS
+                  </span>
+                  <span className="cg-chart-curr">
+                    Currently <span>{score} / 100</span>
+                  </span>
+                </div>
+
+                {chartScans.length > 0 ? (
+                  <div style={{ width: "100%", overflowX: "auto" }}>
+                    <svg viewBox={`0 0 ${svgWidth} 125`} style={{ width: "100%", height: "auto", minHeight: 110 }}>
+                      <line x1={padX} y1={svgHeight} x2={svgWidth - padX} y2={svgHeight} stroke="#e6e1d9" strokeDasharray="3 3" />
+
+                      {chartPoints.length > 1 && (
+                        <polyline
+                          fill="none"
+                          stroke="#e2610c"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          points={pointsString}
+                        />
+                      )}
+
+                      {chartPoints.map((p, idx) => {
+                        const isLatest = idx === chartPoints.length - 1;
+                        return (
+                          <g key={p.id}>
+                            {isLatest ? (
+                              <>
+                                <circle cx={p.x} cy={p.y} r="6" fill="#1c1a18" />
+                                <circle cx={p.x} cy={p.y} r="2.5" fill="#ffffff" />
+                              </>
+                            ) : (
+                              <circle cx={p.x} cy={p.y} r="4.5" fill="#e2610c" />
+                            )}
+                            <text
+                              x={p.x}
+                              y={svgHeight + 24}
+                              textAnchor="middle"
+                              fontFamily="var(--mono)"
+                              fontSize="11"
+                              fill="#a39c95"
+                            >
+                              {p.label}
+                            </text>
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  </div>
+                ) : (
+                  <div style={{ padding: "30px 0", textAlign: "center", color: "#a39c95", fontSize: 13 }}>
+                    Run scans to build your compliance readiness trend line.
+                  </div>
+                )}
+              </div>
+
+              {/* All Scans List */}
+              <div>
+                <div className="cg-section-header">ALL SCANS</div>
+                <div className="cg-hist-list">
+                  {scans.map((scanItem, idx) => {
+                    const olderScan = scans[idx + 1];
+                    const isFirstScan = !olderScan;
+                    const diff = olderScan ? scanItem.score - olderScan.score : 0;
+                    const issuesDiff = olderScan ? scanItem.failedChecks - olderScan.failedChecks : 0;
+
+                    let title = "No change since last scan";
+                    let badgeClass = "neutral";
+                    if (isFirstScan) {
+                      title = "First scan";
+                    } else if (diff > 0) {
+                      title = `Score improved ${diff} point${diff > 1 ? "s" : ""}`;
+                      badgeClass = "improved";
+                    } else if (diff < 0) {
+                      title = `Score dropped ${Math.abs(diff)} point${Math.abs(diff) > 1 ? "s" : ""} since last scan`;
+                      badgeClass = "drop";
+                    }
+
+                    const dateInfo = formatScanDates(scanItem.createdAt);
+                    const isExpanded = expandedScanId === scanItem.id;
+                    const catScores = (scanItem.categoryScores as Record<string, number> | null) || {};
+
+                    return (
+                      <div key={scanItem.id}>
+                        <div className="cg-hist-row">
+                          <div className="cg-hist-date">
+                            <span className="cg-hist-primary">{dateInfo.primary}</span>
+                            <span className="cg-hist-secondary">{dateInfo.secondary}</span>
+                          </div>
+
+                          <div className={`cg-hist-badge ${badgeClass}`}>
+                            {scanItem.score}
+                          </div>
+
+                          <div className="cg-hist-info">
+                            <span className="cg-hist-title">{title}</span>
+                            <div className="cg-hist-sub">
+                              {isFirstScan ? (
+                                <span>Onboarding scan — {scanItem.passedChecks}/{scanItem.totalChecks} checks passed</span>
+                              ) : diff < 0 ? (
+                                <>
+                                  <span className="cg-arr-down">↓ {Math.max(1, issuesDiff)} new issue{issuesDiff > 1 ? "s" : ""}</span>
+                                  {olderScan && scanItem.passedChecks > olderScan.passedChecks && (
+                                    <span className="cg-arr-up">↑ {scanItem.passedChecks - olderScan.passedChecks} issues resolved</span>
+                                  )}
+                                </>
+                              ) : diff > 0 ? (
+                                <span className="cg-arr-up">↑ {Math.abs(issuesDiff) || diff} issues resolved</span>
+                              ) : (
+                                <span>Routine scan — {scanItem.passedChecks}/{scanItem.totalChecks} checks passed</span>
+                              )}
+                            </div>
+                          </div>
+
+                          {isFirstScan && (
+                            <span className="cg-pill-onboard">onboarding</span>
+                          )}
+
+                          <button
+                            type="button"
+                            className="cg-view-btn"
+                            onClick={() => setExpandedScanId(isExpanded ? null : scanItem.id)}
+                          >
+                            {isExpanded ? "Close" : "View"}
+                          </button>
+                        </div>
+
+                        {isExpanded && (
+                          <div className="cg-issue-expanded" style={{ margin: "4px 0 14px 140px" }}>
+                            <div style={{ fontWeight: 600, color: "var(--ink)" }}>
+                              Scan Breakdown ({new Date(scanItem.createdAt).toLocaleString()}):
+                            </div>
+                            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginTop: 4 }}>
+                              <div>Policy: <strong>{catScores.policy ?? "�"}%</strong></div>
+                              <div>Contact: <strong>{catScores.identity ?? "�"}%</strong></div>
+                              <div>Feed: <strong>{catScores.feed ?? "�"}%</strong></div>
+                              <div>Trust: <strong>{catScores.trust ?? "�"}%</strong></div>
+                            </div>
+                            <div style={{ marginTop: 4, color: "var(--ink-soft)" }}>
+                              Passed: {scanItem.passedChecks} of {scanItem.totalChecks} checks � Issues: {scanItem.failedChecks}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                      <div style={{ fontFamily: "var(--mono)", fontSize: 12, color: "#6b6560" }}>
-                        {s.passedChecks}/{s.totalChecks} checks passed � {s.failedChecks} issues
-                      </div>
+                    );
+                  })}
+
+                  {scans.length === 0 && (
+                    <div style={{ padding: "30px 10px", textAlign: "center", color: "#a39c95", fontSize: 13 }}>
+                      No scan history yet. Trigger your first scan to see results here!
                     </div>
-                  ))}
-                  {(shop.scans || []).length === 0 && (
-                    <p style={{ color: "#a39c95", fontSize: 13 }}>No previous scans recorded yet.</p>
                   )}
                 </div>
               </div>
             </div>
           ) : (
+            /* -------------------- DASHBOARD MAIN VIEW -------------------- */
             <>
               <div className="cg-content">
                 {/* Hero / Score Section */}
@@ -700,7 +1056,7 @@ export default function DashboardPage() {
                       <span className="cg-stat-label">ISSUES FOUND</span>
                     </div>
                     <div className="cg-stat-item">
-                      <span className="cg-stat-value">{timeAgo(shop.lastScannedAt)}</span>
+                      <span className="cg-stat-value">{timeAgo(shop.lastScannedAt || latestScan?.createdAt)}</span>
                       <span className="cg-stat-label">LAST SCANNED</span>
                     </div>
                   </div>
@@ -748,7 +1104,7 @@ export default function DashboardPage() {
                 <div>
                   <div className="cg-section-header">{issuesFound} ISSUES, RANKED BY PRIORITY</div>
                   <div className="cg-issues-list">
-                    {unresolvedIssues.map((issue: any) => {
+                    {unresolvedIssues.map((issue) => {
                       const deepLink = getShopifyDeepLink(issue.ruleCode, shop.shopDomain);
                       const isExpanded = expandedIssueId === issue.id;
                       const badgeCls = issue.severity === "CRITICAL" ? "cg-badge-high" : "cg-badge-medium";
@@ -766,23 +1122,11 @@ export default function DashboardPage() {
                         <div key={issue.id}>
                           <div className="cg-issue-row">
                             <span className={`cg-issue-badge ${badgeCls}`}>{badgeLabel}</span>
-                            <span
-                              className="cg-issue-title"
-                              onClick={() => setExpandedIssueId(isExpanded ? null : issue.id)}
-                              style={{ cursor: "pointer" }}
-                            >
-                              {issue.title}
-                            </span>
-                            <span
-                              className="cg-issue-desc"
-                              onClick={() => setExpandedIssueId(isExpanded ? null : issue.id)}
-                              style={{ cursor: "pointer" }}
-                            >
-                              {issue.description}
-                            </span>
+                            <button type="button" className="cg-issue-title" onClick={() => setExpandedIssueId(isExpanded ? null : issue.id)}>{issue.title}</button>
+                            <button type="button" className="cg-issue-desc" onClick={() => setExpandedIssueId(isExpanded ? null : issue.id)}>{issue.description}</button>
                             <span className="cg-issue-cat">{categoryDisplay}</span>
                             <a href={deepLink} target="_blank" rel="noopener noreferrer" className="cg-fix-btn">
-                              Fix in Shopify ?
+                              Fix in Shopify →
                             </a>
                           </div>
 
@@ -796,7 +1140,7 @@ export default function DashboardPage() {
                                 <strong>How to resolve: </strong>
                                 <span className="cg-expanded-guide">{issue.fixGuide}</span>
                               </div>
-                              <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
+                              {/* <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
                                 <a
                                   href={deepLink}
                                   target="_blank"
@@ -818,7 +1162,7 @@ export default function DashboardPage() {
                                     Mark as Resolved ?
                                   </button>
                                 </Form>
-                              </div>
+                              </div> */}
                             </div>
                           )}
                         </div>
@@ -827,7 +1171,7 @@ export default function DashboardPage() {
 
                     {unresolvedIssues.length === 0 && (
                       <div style={{ padding: "24px 10px", textAlign: "center", color: "#10b981", fontWeight: 600, fontSize: 14 }}>
-                        ?? All 18 checks passed! No compliance issues found.
+                        ✓ All 18 checks passed! No compliance issues found.
                       </div>
                     )}
 
@@ -836,7 +1180,7 @@ export default function DashboardPage() {
                         <div style={{ fontSize: 12, color: "#a39c95", marginBottom: 6 }}>
                           {resolvedIssues.length} manually resolved issue(s):
                         </div>
-                        {resolvedIssues.map((r: any) => (
+                        {resolvedIssues.map((r) => (
                           <div key={r.id} className="cg-issue-row" style={{ opacity: 0.6 }}>
                             <span className="cg-issue-badge cg-badge-resolved">RESOLVED</span>
                             <span className="cg-issue-title" style={{ textDecoration: "line-through" }}>{r.title}</span>
@@ -864,9 +1208,9 @@ export default function DashboardPage() {
                       className="cg-passed-toggle"
                       onClick={() => setShowPassed(!showPassed)}
                     >
-                      <div className="cg-passed-mark">?</div>
+                      <div className="cg-passed-mark">✓</div>
                       <span>
-                        {totalPassed} checks passed � {showPassed ? "hide details" : "show details"}
+                        {totalPassed} checks passed — {showPassed ? "hide details" : "show details"}
                       </span>
                     </button>
 
@@ -874,7 +1218,7 @@ export default function DashboardPage() {
                       <div className="cg-passed-list">
                         {passedChecksList.map((chk) => (
                           <div key={chk.ruleCode} className="cg-passed-row">
-                            <span className="cg-passed-icon">?</span>
+                            <span className="cg-passed-icon">✓</span>
                             <span style={{ fontWeight: 500, color: "#1c1a18" }}>{chk.label}</span>
                             <span style={{ marginLeft: "auto", fontFamily: "var(--mono)", fontSize: 10.5, color: "#a39c95" }}>
                               {chk.groupName}

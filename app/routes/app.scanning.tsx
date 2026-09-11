@@ -1,4 +1,4 @@
-﻿import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import type {
   ActionFunctionArgs,
   HeadersFunction,
@@ -86,7 +86,7 @@ const css = `
     --ink:#1c1a18;
     --ink-soft:#6b6560;
     --ink-faint:#a39c95;
-    --canvas:#f1efe9;
+    --canvas:#f1f1f1;
     --surface:#ffffff;
     --line:#e6e1d9;
     --accent:#e2610c;
@@ -99,21 +99,20 @@ const css = `
 
   .cg-wrap{
     margin:0;
-    background:
-      radial-gradient(circle at 15% 0%,#f7f5ef 0%,transparent 55%),
-      var(--canvas);
+    background:#f1f1f1;
     font-family:var(--body);
     color:var(--ink);
     display:flex;
     align-items:center;
     justify-content:center;
     min-height:100vh;
-    padding:28px 14px;
-    overflow-x:auto;
+    padding:32px 20px;
+    box-sizing:border-box;
   }
 
   .cg-shell{
-    width:920px;min-width:920px;max-width:920px;
+    width:100%;
+    max-width:1080px;
     background:var(--surface);
     border-radius:20px;
     border:1px solid var(--line);
@@ -121,6 +120,12 @@ const css = `
     overflow:hidden;
     min-height:580px;
     display:flex;flex-direction:column;
+  }
+
+  @media (max-width: 768px) {
+    .cg-wrap { padding: 16px 12px; }
+    .cg-shell { border-radius: 14px; min-height: auto; }
+    .cg-stage { padding: 32px 16px 36px; }
   }
 
   .cg-topbar{
@@ -261,7 +266,7 @@ const css = `
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ScanningPage() {
-  const { shop } = useLoaderData<typeof loader>();
+  useLoaderData<typeof loader>();
   const location  = useLocation();
   const navigate  = useNavigate();
   const fetcher   = useFetcher<typeof action>();
@@ -375,10 +380,7 @@ export default function ScanningPage() {
         <div className="cg-shell">
 
           {/* ── Topbar ── */}
-          {/* <div className="cg-topbar">
-            <div className="cg-brand-mark">CG</div>
-            <div className="cg-brand-name">ComplyGuard</div>
-          </div> */}
+
 
           {/* ── Stage ── */}
           <div className="cg-stage">
