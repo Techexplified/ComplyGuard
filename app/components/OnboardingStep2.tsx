@@ -28,7 +28,7 @@ export function OnboardingStep2({
 
       {/* Description */}
       <p className="text-sm sm:text-[15px] text-zinc-600 leading-relaxed mb-8 max-w-175">
-        A webhook tells us when something changes &mdash; but not whether
+        A webhook tells us when something changes but not whether
         it&apos;s actually visible to shoppers. The embed lets us check that
         too.
       </p>

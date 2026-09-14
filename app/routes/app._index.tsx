@@ -1,9 +1,10 @@
 import { useState } from "react";
 import type { HeadersFunction, LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
-import { redirect, useLoaderData, Form, Link, useRouteError } from "react-router";
+import { redirect, useLoaderData, useLocation, Form, Link, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
+import { getMonthlyScanUsage } from "../service/scanner.server";
 
 // --- Server Loader & Action --------------------------------------------------
 
@@ -39,7 +40,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     return redirect(`/app/onboarding${url.search}`);
   }
 
-  return { shop: shopRecord };
+  const scanUsage = await getMonthlyScanUsage(shopDomain);
+  return { shop: shopRecord, scanUsage };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -115,7 +117,7 @@ function getShopifyDeepLink(ruleCode: string, shopDomain: string): string {
   const base = `https://admin.shopify.com/store/${cleanDomain}`;
 
   if (ruleCode.startsWith("REFUND") || ruleCode.startsWith("SHIPPING") || ruleCode.startsWith("PRIVACY") || ruleCode.startsWith("TERMS")) {
-    return `${base}/settings/policies`;
+    return `${base}/settings/legal`;
   }
   if (ruleCode === "POLICIES_NOT_IN_FOOTER") return `${base}/menus`;
   if (ruleCode.includes("ADDRESS") || ruleCode.includes("PHONE") || ruleCode.includes("BUSINESS_NAME") || ruleCode.includes("EMAIL")) {
@@ -735,10 +737,64 @@ const css = `
     background: #f7f5ef;
     border-color: #b5b0a8;
   }
+
+  .cg-bottom-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+    padding: 20px 32px;
+    background: #ffffff;
+    border-top: 1px solid var(--line);
+  }
+  .cg-quota-info {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--ink-soft);
+  }
+  .cg-quota-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+  .cg-quota-count {
+    font-family: var(--mono);
+    font-weight: 600;
+    color: var(--ink);
+  }
+  .cg-rescan-btn {
+    background: var(--ink);
+    color: #ffffff;
+    font-family: var(--body);
+    font-size: 13.5px;
+    font-weight: 600;
+    padding: 10px 22px;
+    border-radius: 10px;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    border: none;
+  }
+  .cg-rescan-btn:hover {
+    background: #332f2b;
+    color: #ffffff;
+  }
+  .cg-rescan-btn-disabled {
+    background: #e6e1d9 !important;
+    color: #a39c95 !important;
+    cursor: not-allowed !important;
+  }
 `;
 
 export default function DashboardPage() {
-  const { shop } = useLoaderData<typeof loader>();
+  const { shop, scanUsage } = useLoaderData<typeof loader>();
+  const location = useLocation();
   const [activeTab, setActiveTab] = useState<"dashboard" | "history">("dashboard");
   const [showPassed, setShowPassed] = useState(false);
   const [expandedIssueId, setExpandedIssueId] = useState<string | null>(null);
@@ -854,7 +910,7 @@ export default function DashboardPage() {
               <div className="cg-chart-card">
                 <div className="cg-chart-top">
                   <span className="cg-chart-label">
-                    READINESS SCORE � LAST {chartScans.length || 1} SCANS
+                    READINESS SCORE  LAST {chartScans.length || 1} SCANS
                   </span>
                   <span className="cg-chart-curr">
                     Currently <span>{score} / 100</span>
@@ -994,7 +1050,7 @@ export default function DashboardPage() {
                               <div>Trust: <strong>{catScores.trust ?? "�"}%</strong></div>
                             </div>
                             <div style={{ marginTop: 4, color: "var(--ink-soft)" }}>
-                              Passed: {scanItem.passedChecks} of {scanItem.totalChecks} checks � Issues: {scanItem.failedChecks}
+                              Passed: {scanItem.passedChecks} of {scanItem.totalChecks} checks  Issues: {scanItem.failedChecks}
                             </div>
                           </div>
                         )}
@@ -1231,11 +1287,34 @@ export default function DashboardPage() {
                 </div>
               </div>
 
-              {/* Bottom Re-Scan Button */}
+              {/* Bottom Re-Scan Button with Monthly Quota */}
               <div className="cg-bottom-bar">
-                <Link to="/app/scanning" className="cg-rescan-btn">
-                  Re - Scan Now
-                </Link>
+                <div className="cg-quota-info">
+                  <span
+                    className="cg-quota-dot"
+                    style={{ background: scanUsage.canScan ? "#10b981" : "#ea580c" }}
+                  />
+                  <span>
+                    Monthly Scans: <strong className="cg-quota-count">{scanUsage.count} / {scanUsage.limit} used</strong>
+                    {scanUsage.canScan
+                      ? ` (${scanUsage.remaining} remaining)`
+                      : ` · Quota resets ${new Date(scanUsage.resetsAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`}
+                  </span>
+                </div>
+                {scanUsage.canScan ? (
+                  <Link to={`/app/scanning${location.search}`} className="cg-rescan-btn">
+                    Re - Scan Now
+                  </Link>
+                ) : (
+                  <button
+                    type="button"
+                    disabled
+                    className="cg-rescan-btn cg-rescan-btn-disabled"
+                    title={`Monthly scan limit reached (${scanUsage.limit}/${scanUsage.limit} scans used). Quota resets on ${new Date(scanUsage.resetsAt).toLocaleDateString()}.`}
+                  >
+                    Monthly Limit Reached (5/5)
+                  </button>
+                )}
               </div>
             </>
           )}

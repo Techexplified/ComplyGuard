@@ -25,10 +25,95 @@ export interface IssueResult {
   fixGuide: string;
 }
 
+export const MONTHLY_SCAN_LIMIT = 5;
+
+export interface MonthlyScanUsage {
+  count: number;
+  limit: number;
+  remaining: number;
+  canScan: boolean;
+  resetsAt: string;
+}
+
+export async function getMonthlyScanUsage(shopDomain: string): Promise<MonthlyScanUsage> {
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+
+  const count = await prisma.scan.count({
+    where: {
+      shopId: shopDomain,
+      createdAt: { gte: startOfMonth },
+    },
+  });
+
+  const remaining = Math.max(0, MONTHLY_SCAN_LIMIT - count);
+  const canScan = count < MONTHLY_SCAN_LIMIT;
+  const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
+
+  return {
+    count,
+    limit: MONTHLY_SCAN_LIMIT,
+    remaining,
+    canScan,
+    resetsAt: nextMonth.toISOString(),
+  };
+}
+
+export const SCAN_DEBOUNCE_SECONDS = 15;
+
 export async function runStorefrontComplianceScan({
   admin,
   shopDomain,
 }: ScanContext) {
+  // -------------------------------------------------------------
+  // 0a. Debounce Guard (Prevents accidental rapid duplicate triggers)
+  // -------------------------------------------------------------
+  const shopRecord = await prisma.shop.findUnique({
+    where: { shopDomain },
+    select: { lastScannedAt: true },
+  });
+
+  if (shopRecord?.lastScannedAt) {
+    const elapsedSeconds =
+      (Date.now() - new Date(shopRecord.lastScannedAt).getTime()) / 1000;
+    if (elapsedSeconds < SCAN_DEBOUNCE_SECONDS) {
+      console.log(
+        `[Scanner] Debounce triggered for ${shopDomain}: last scan was ${elapsedSeconds.toFixed(1)}s ago. Returning latest scan.`
+      );
+      const latestScan = await prisma.scan.findFirst({
+        where: { shopId: shopDomain },
+        orderBy: { createdAt: "desc" },
+      });
+      if (latestScan) {
+        const existingIssues = await prisma.issue.findMany({ where: { shopId: shopDomain } });
+        return {
+          score: latestScan.score,
+          totalChecks: latestScan.totalChecks,
+          passedChecks: latestScan.passedChecks,
+          failedChecks: latestScan.failedChecks,
+          issues: existingIssues.map((iss) => ({
+            category: iss.category as IssueResult["category"],
+            severity: iss.severity as IssueResult["severity"],
+            ruleCode: iss.ruleCode,
+            title: iss.title,
+            description: iss.description,
+            fixGuide: iss.fixGuide,
+          })),
+        };
+      }
+    }
+  }
+
+  // -------------------------------------------------------------
+  // 0b. Enforce Monthly Scan Limit (Max 5 scans per calendar month)
+  // -------------------------------------------------------------
+  const usage = await getMonthlyScanUsage(shopDomain);
+  if (!usage.canScan) {
+    throw new Error(
+      `Monthly scan limit reached (${usage.count}/${usage.limit} scans used this month). Your quota will reset on ${new Date(usage.resetsAt).toLocaleDateString()}.`
+    );
+  }
+
   const issues: IssueResult[] = [];
   let passedChecks = 0;
   const totalChecks = 18;
@@ -273,15 +358,36 @@ interface StorefrontProduct {
       const $p = cheerio.load(html);
       const title = $p("title").text().toLowerCase();
       const h1Text = $p("h1, h2").first().text().toLowerCase();
-      const bodyText = $p("body").text().trim();
+
+      // Remove non-content tags so scripts, JSON-LD, and styles don't pollute the policy text
+      $p("script, style, noscript, svg, iframe").remove();
+
+      // Specifically extract from Shopify's standard policy container or main content
+      let contentText = $p(
+        ".shopify-policy__container, .shopify-policy__body, .shopify-policy__title, .rte, main, article"
+      )
+        .first()
+        .text()
+        .trim();
+
+      // Fallback: if specific container wasn't found, remove header/nav/footer and use body
+      if (!contentText || contentText.length < 50) {
+        $p(
+          "header, nav, footer, [class*='header'], [class*='nav'], [class*='footer'], [id*='header'], [id*='nav'], [id*='footer']"
+        ).remove();
+        contentText = $p("body").text().trim();
+      }
+
+      const cleanText = contentText.replace(/\s+/g, " ");
+
       const is404 =
         title.includes("404") ||
         title.includes("page not found") ||
         h1Text.includes("404") ||
         h1Text.includes("page not found") ||
-        bodyText.length < 50;
+        cleanText.length < 50;
       if (is404) return { exists: false, html: "", text: "" };
-      return { exists: true, html, text: bodyText };
+      return { exists: true, html, text: cleanText };
     } catch (err) {
       console.error(`[Policy Fetch] Failed to fetch ${url}:`, err);
       return { exists: false, html: "", text: "" };
@@ -387,6 +493,17 @@ interface StorefrontProduct {
       ),
     ]);
 
+  // Extract clean text from footer and contact page for physical address checking
+  const footerAddressText = $home("footer, [class*='footer'], [id*='footer'], address")
+    .text()
+    .replace(/\s+/g, " ")
+    .trim();
+  const contactAddressText = $contact("main, article, .rte, body")
+    .text()
+    .replace(/\s+/g, " ")
+    .trim();
+  const addressCandidateText = `${footerAddressText}\n${contactAddressText}`.trim();
+
   // =============================================================
   // AI PRE-CHECKS (Parallel) — Results used in checks 2, 9, 15
   // =============================================================
@@ -395,7 +512,7 @@ interface StorefrontProduct {
     // Check 2: Policy quality
     checkPolicyQuality(refundData.exists ? refundData.text : ""),
     // Check 9: Physical address
-    checkPhysicalAddress(`${homepageHtml} ${contactPageHtml}`),
+    checkPhysicalAddress(addressCandidateText || `${homepageHtml} ${contactPageHtml}`),
     // Check 15: Product claims
     checkProductClaims(
       products.map((p: { title: string; descriptionHtml: string }) => ({

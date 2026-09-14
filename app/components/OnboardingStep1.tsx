@@ -12,7 +12,7 @@ export function OnboardingStep1({ onContinue }: OnboardingStep1Props) {
         Let’s get your store protected
       </h1>
       <p className="text-sm sm:text-base text-zinc-600 leading-normal mb-10 md:mb-11 max-w-200">
-        ComplyGuard works in three stages, in this order — each one builds on the last.
+        ComplyGuard works in three stages, in this order each one builds on the last.
       </p>
 
       {/* Three Stages Cards */}

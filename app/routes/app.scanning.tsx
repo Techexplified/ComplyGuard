@@ -5,6 +5,7 @@ import type {
   LoaderFunctionArgs,
 } from "react-router";
 import {
+  Link,
   useFetcher,
   useLoaderData,
   useLocation,
@@ -14,7 +15,10 @@ import {
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { runStorefrontComplianceScan } from "../service/scanner.server";
+import {
+  getMonthlyScanUsage,
+  runStorefrontComplianceScan,
+} from "../service/scanner.server";
 
 // ─── Server ──────────────────────────────────────────────────────────────────
 
@@ -22,7 +26,8 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session } = await authenticate.admin(request);
   const shopDomain = session.shop;
   const shopRecord = await prisma.shop.findUnique({ where: { shopDomain } });
-  return { shop: shopDomain, shopRecord };
+  const scanUsage = await getMonthlyScanUsage(shopDomain);
+  return { shop: shopDomain, shopRecord, scanUsage };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -266,7 +271,7 @@ const css = `
 // ─── Component ────────────────────────────────────────────────────────────────
 
 export default function ScanningPage() {
-  useLoaderData<typeof loader>();
+  const { scanUsage } = useLoaderData<typeof loader>();
   const location  = useLocation();
   const navigate  = useNavigate();
   const fetcher   = useFetcher<typeof action>();
@@ -280,16 +285,18 @@ export default function ScanningPage() {
   const slidingRef      = useRef(false);
   const pctTimerRef     = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 1. Auto-trigger scan on mount
+  // 1. Auto-trigger scan on mount ONLY if quota allows
   useEffect(() => {
+    if (!scanUsage.canScan) return;
     if (!hasTriggeredRef.current && fetcher.state === "idle" && !fetcher.data) {
       hasTriggeredRef.current = true;
       fetcher.submit({}, { method: "POST" });
     }
-  }, [fetcher]);
+  }, [fetcher, scanUsage.canScan]);
 
   // 2. Advance pct counter (holds at 92 until backend returns)
   useEffect(() => {
+    if (!scanUsage.canScan) return;
     pctTimerRef.current = setInterval(() => {
       setPct((prev) => {
         const done = Boolean(fetcher.data?.success);
@@ -299,7 +306,7 @@ export default function ScanningPage() {
       });
     }, 120);
     return () => clearInterval(pctTimerRef.current!);
-  }, [fetcher.data]);
+  }, [fetcher.data, scanUsage.canScan]);
 
   // Derive which check index is currently "active"
   const rawActiveIdx    = CHECK_THRESHOLDS.findIndex((t) => pct < t);
@@ -336,7 +343,7 @@ export default function ScanningPage() {
       setCountdown((c) => {
         if (c === null || c <= 1) {
           clearInterval(t);
-          navigate(`/app${location.search}`);
+          navigate(`/app${location.search}`, { replace: true });
           return 0;
         }
         return c - 1;
@@ -372,6 +379,43 @@ export default function ScanningPage() {
     : activeCheckIdx < ALL_CHECKS.length
     ? `Checking: ${ALL_CHECKS[activeCheckIdx].label}…`
     : "Saving results to database…";
+
+  // If quota reached, render limit screen after all hooks have executed
+  if (!scanUsage.canScan) {
+    return (
+      <>
+        <style dangerouslySetInnerHTML={{ __html: css }} />
+        <div className="cg-wrap">
+          <div className="cg-shell" style={{ alignItems: "center", justifyContent: "center", padding: "60px 24px", textAlign: "center" }}>
+            <div style={{ width: 64, height: 64, borderRadius: "50%", background: "#fff7ed", border: "1px solid #fed7aa", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#ea580c" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+            </div>
+            <h2 style={{ fontSize: 24, fontWeight: 700, color: "var(--ink)", marginBottom: 10 }}>
+              Monthly Scan Limit Reached
+            </h2>
+            <p style={{ fontSize: 14, color: "var(--ink-soft)", maxWidth: 460, lineHeight: 1.6, marginBottom: 24 }}>
+              You have used all <strong>{scanUsage.limit} of {scanUsage.limit} scans</strong> included in your monthly quota. Your scans will reset on <strong>{new Date(scanUsage.resetsAt).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" })}</strong>.
+            </p>
+            <div style={{ background: "#fafafa", border: "1px solid var(--line)", borderRadius: 12, padding: "14px 28px", marginBottom: 28, display: "inline-flex", alignItems: "center", gap: 12 }}>
+              <span style={{ fontSize: 13, color: "var(--ink)" }}>Usage this month:</span>
+              <span style={{ fontFamily: "var(--mono)", fontWeight: 700, color: "#ea580c", fontSize: 14 }}>
+                {scanUsage.count} / {scanUsage.limit} scans
+              </span>
+            </div>
+            <div>
+              <Link to="/app" className="cg-retry-btn" style={{ background: "var(--ink)", display: "inline-block", textDecoration: "none", padding: "12px 28px", borderRadius: 10 }}>
+                ← Return to Dashboard
+              </Link>
+            </div>
+          </div>
+        </div>
+      </>
+    );
+  }
 
   return (
     <>
