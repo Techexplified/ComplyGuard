@@ -25,7 +25,18 @@ export interface IssueResult {
   fixGuide: string;
 }
 
+interface StorefrontProduct {
+  id: number | string;
+  title: string;
+  variants: Array<{
+    id: number | string;
+    price: string;
+    available?: boolean;
+  }>;
+}
+
 export const MONTHLY_SCAN_LIMIT = 5;
+
 
 export interface MonthlyScanUsage {
   count: number;
@@ -167,16 +178,6 @@ export async function runStorefrontComplianceScan({
   const shopData = data?.shop;
   const products = data?.products?.nodes || [];
   const storeUrl = shopData?.primaryDomain?.url || `https://${shopDomain}`;
-
-interface StorefrontProduct {
-  id: number | string;
-  title: string;
-  variants: Array<{
-    id: number | string;
-    price: string;
-    available?: boolean;
-  }>;
-}
 
   // -------------------------------------------------------------
   // 2. Fetch Storefront Homepage & Public Data (Parallel)
