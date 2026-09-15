@@ -1,4 +1,4 @@
-﻿/**
+/**
  * ai-checks.server.ts
  *
  * LangChain + OpenRouter (GPT-4o-mini) AI-powered compliance checks.
@@ -22,8 +22,10 @@ function getModel() {
   const apiKey = process.env.OPENROUTER_API_KEY?.trim();
   if (!apiKey) return null;
 
+  const modelName = process.env.OPENROUTER_MODEL?.trim() || "openrouter/free";
+
   return new ChatOpenAI({
-    model: "openai/gpt-4o-mini",
+    model: modelName,
     temperature: 0,
     apiKey: apiKey,
     maxTokens: 800,
@@ -96,7 +98,10 @@ Be strict but fair. A policy mentioning "30 days" and "unused" is sufficient to 
     console.log("[AI-Check 2] Result:", JSON.stringify(result));
     return result;
   } catch (err) {
-    console.error("[AI-Check 2] AI evaluation failed, falling back to rule check:", err);
+    console.error(
+      "[AI-Check 2] AI evaluation failed, falling back to rule check:",
+      (err as Error)?.message || err
+    );
     return fallbackCheck();
   }
 }
@@ -153,7 +158,10 @@ PO Box addresses also count. Do NOT count email addresses or URLs.`,
     console.log("[AI-Check 9] Result:", JSON.stringify(result));
     return result;
   } catch (err) {
-    console.error("[AI-Check 9] AI evaluation failed, falling back to rule check:", err);
+    console.error(
+      "[AI-Check 9] AI evaluation failed, falling back to rule check:",
+      (err as Error)?.message || err
+    );
     return fallbackCheck();
   }
 }
@@ -250,7 +258,10 @@ Flag only genuine violations. Do not flag normal product descriptions.`,
     console.log(`[AI-Check 15] Result: pass=${result.pass}, flagged=${result.flagged.length}`);
     return result;
   } catch (err) {
-    console.error("[AI-Check 15] AI evaluation failed, falling back to rule check:", err);
+    console.error(
+      "[AI-Check 15] AI evaluation failed, falling back to rule check:",
+      (err as Error)?.message || err
+    );
     return fallbackCheck();
   }
 }
