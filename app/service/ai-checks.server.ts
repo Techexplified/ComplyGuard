@@ -17,7 +17,20 @@ import { z } from "zod";
 
 // ─────────────────────────────────────────────────────────────────
 // Shared LangChain model factory
-// ─────────────────────────────────────────────────────────────────
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeoutPromise = new Promise<T>((resolve) => {
+    timer = setTimeout(() => {
+      console.warn(`[AI-Check] Operation timed out after ${ms / 1000}s, falling back to rule check.`);
+      resolve(fallback);
+    }, ms);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    clearTimeout(timer);
+  });
+}
+
 function getModel() {
   const apiKey = process.env.OPENROUTER_API_KEY?.trim();
   if (!apiKey) return null;
@@ -29,6 +42,8 @@ function getModel() {
     temperature: 0,
     apiKey: apiKey,
     maxTokens: 800,
+    timeout: 12000,
+    maxRetries: 1,
     configuration: {
       baseURL: "https://openrouter.ai/api/v1",
       defaultHeaders: {
@@ -81,19 +96,23 @@ export async function checkPolicyQuality(policyText: string): Promise<PolicyQual
     const structured = model.withStructuredOutput(PolicyQualitySchema);
     console.log("[AI-Check 2] Evaluating refund policy quality via GPT-4o-mini");
 
-    const result = await structured.invoke([
-      {
-        role: "system",
-        content: `You are a Google Merchant Center and Shopify compliance auditor.
+    const result = await withTimeout(
+      structured.invoke([
+        {
+          role: "system",
+          content: `You are a Google Merchant Center and Shopify compliance auditor.
 Evaluate the refund/return policy against these mandatory requirements:
 1. A concrete return window must be stated (e.g. "within 30 days", "14 business days")
 2. Return item conditions must be specified (e.g. unused, original packaging, tags attached)
 3. The policy must NOT be a blank template or fewer than 50 meaningful words
 4. Ideally states who pays return shipping costs
 Be strict but fair. A policy mentioning "30 days" and "unused" is sufficient to pass.`,
-      },
-      { role: "user", content: `Refund policy text:\n\n${policyText.slice(0, 3000)}` },
-    ]);
+        },
+        { role: "user", content: `Refund policy text:\n\n${policyText.slice(0, 3000)}` },
+      ]) as Promise<PolicyQualityResult>,
+      12000,
+      fallbackCheck()
+    );
 
     console.log("[AI-Check 2] Result:", JSON.stringify(result));
     return result;
@@ -144,16 +163,20 @@ export async function checkPhysicalAddress(pageText: string): Promise<AddressDet
     const structured = model.withStructuredOutput(AddressDetectionSchema);
     console.log("[AI-Check 9] Detecting physical address via GPT-4o-mini");
 
-    const result = await structured.invoke([
-      {
-        role: "system",
-        content: `You are a named entity recognition system specialising in detecting physical business addresses.
+    const result = await withTimeout(
+      structured.invoke([
+        {
+          role: "system",
+          content: `You are a named entity recognition system specialising in detecting physical business addresses.
 Scan the webpage text and determine whether a physical mailing or business location address exists.
 A valid address includes a street number, street name, city, and optionally a postal/zip code or country.
 PO Box addresses also count. Do NOT count email addresses or URLs.`,
-      },
-      { role: "user", content: `Webpage text:\n\n${pageText.slice(0, 4000)}` },
-    ]);
+        },
+        { role: "user", content: `Webpage text:\n\n${pageText.slice(0, 4000)}` },
+      ]) as Promise<AddressDetectionResult>,
+      12000,
+      fallbackCheck()
+    );
 
     console.log("[AI-Check 9] Result:", JSON.stringify(result));
     return result;
@@ -228,21 +251,21 @@ export async function checkProductClaims(
   }
 
   try {
-    const structured = model.withStructuredOutput(ProductClaimsSchema);
-    console.log(`[AI-Check 15] Scanning ${products.length} products via GPT-4o-mini`);
+    const sampleProducts = products.slice(0, 8);
+    console.log(`[AI-Check 15] Scanning ${sampleProducts.length} products via GPT-4o-mini`);
 
-    const productList = products
-      .slice(0, 30)
+    const productList = sampleProducts
       .map(
         (p, i) =>
-          `[${i + 1}] Title: ${p.title}\nDescription: ${p.description.replace(/<[^>]+>/g, " ").slice(0, 300)}`
+          `[${i + 1}] Title: ${p.title}\nDescription: ${p.description.replace(/<[^>]+>/g, " ").slice(0, 200)}`
       )
       .join("\n\n");
 
-    const result = await structured.invoke([
-      {
-        role: "system",
-        content: `You are a Google Merchant Center and Shopify AUP policy enforcer.
+    const result = await withTimeout(
+      structured.invoke([
+        {
+          role: "system",
+          content: `You are a Google Merchant Center and Shopify AUP policy enforcer.
 Scan the product listings for policy violations:
 - Unverifiable guarantees ("100% satisfaction", "best in the world", "guaranteed weight loss")
 - Medical/health claims ("cures", "treats", "clinically proven" without evidence)
@@ -251,9 +274,12 @@ Scan the product listings for policy violations:
 - Prohibited content described misleadingly
 
 Flag only genuine violations. Do not flag normal product descriptions.`,
-      },
-      { role: "user", content: `Product listings:\n\n${productList}` },
-    ]);
+        },
+        { role: "user", content: `Product listings:\n\n${productList}` },
+      ]) as Promise<ProductClaimsResult>,
+      12000,
+      fallbackCheck()
+    );
 
     console.log(`[AI-Check 15] Result: pass=${result.pass}, flagged=${result.flagged.length}`);
     return result;

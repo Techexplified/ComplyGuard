@@ -232,14 +232,23 @@ const css = `
   .cg-topbar {
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: space-between;
     padding: 16px 32px;
     border-bottom: 1px solid var(--line);
+  }
+  .cg-topbar-heading {
+    font-family: var(--disp);
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--ink);
+    letter-spacing: -0.01em;
+    margin: 0;
   }
   .cg-nav {
     display: flex;
     align-items: center;
     gap: 8px;
+    margin-left: auto;
   }
   .cg-nav-link {
     font-family: var(--disp);
@@ -366,9 +375,10 @@ const css = `
     flex-shrink: 0;
   }
   .cg-stat-item {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
+   display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
   }
   .cg-stat-value {
     font-family: var(--disp);
@@ -656,18 +666,45 @@ const css = `
     font-size: 11px;
     color: var(--ink-faint);
   }
-  .cg-hist-badge {
-    width: 42px;
-    height: 42px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: var(--disp);
-    font-size: 15px;
-    font-weight: 700;
-    flex-shrink: 0;
-  }
+.cg-hist-badge {
+  --score: 0deg;
+
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--disp);
+  font-size: 15px;
+  font-weight: 700;
+  flex-shrink: 0;
+
+  /* Orange score ring */
+  background: conic-gradient(
+    #f97316 0deg,
+    #f97316 var(--score),
+    #e5e7eb var(--score),
+    #e5e7eb 360deg
+  );
+
+  position: relative;
+}
+
+/* White center */
+.cg-hist-badge::before {
+  content: "";
+  position: absolute;
+  inset: 4px;
+  background: white;
+  border-radius: 50%;
+}
+
+/* Keep score above the ring */
+.cg-hist-badge span {
+  position: relative;
+  z-index: 1;
+}
   .cg-hist-badge.drop {
     border: 2px solid var(--accent);
     color: var(--accent);
@@ -839,8 +876,8 @@ export default function DashboardPage() {
       : "Your store isn't ready to connect yet";
   const descriptionText =
     score >= 85
-      ? "All mandatory compliance policies and trust signals are active. Your store passes Google Merchant Center requirements."
-      : "Fix the high-priority issues below before connecting to Google Merchant Center they're the most common cause of suspensions.";
+      ? "All mandatory compliance policies and trust signals are active. Your store passes shopify requirements."
+      : "Fix the high-priority issues below before connecting to shopify for review .They're the most common cause of suspensions.";
 
   // Failed rule codes set for real passed checks breakdown
   const failedCodes = new Set(unresolvedIssues.map((i) => i.ruleCode));
@@ -876,19 +913,13 @@ export default function DashboardPage() {
       <div className="cg-dash-wrap">
         <div className="cg-dash-shell">
 
-          {/* Top Bar with right-aligned nav buttons */}
+          {/* Top Bar with left-aligned heading and right-aligned nav */}
           <div className="cg-topbar">
+        {activeTab!="history"&&  <h1 className="cg-topbar-heading">Dashboard</h1> }   
             <div className="cg-nav">
               <button
                 type="button"
-                className={`cg-nav-link ${activeTab === "dashboard" ? "active" : ""}`}
-                onClick={() => setActiveTab("dashboard")}
-              >
-                Dashboard
-              </button>
-              <button
-                type="button"
-                className={`cg-nav-pill ${activeTab === "history" ? "active" : ""}`}
+                className={`cg-nav-pill justify-end ${activeTab === "history" ? "active" : ""}`}
                 onClick={() => setActiveTab(activeTab === "history" ? "dashboard" : "history")}
               >
                 {activeTab === "history" ? "← Back to Dashboard" : "Scan History"}
@@ -1001,9 +1032,12 @@ export default function DashboardPage() {
                             <span className="cg-hist-secondary">{dateInfo.secondary}</span>
                           </div>
 
-                          <div className={`cg-hist-badge ${badgeClass}`}>
-                            {scanItem.score}
-                          </div>
+                          <div
+  className={`cg-hist-badge ${badgeClass}`}
+  style={{ "--score": `${scanItem.score * 3.6}deg` }}
+>
+  <span>{scanItem.score}</span>
+</div>
 
                           <div className="cg-hist-info">
                             <span className="cg-hist-title">{title}</span>
@@ -1108,7 +1142,7 @@ export default function DashboardPage() {
                       <span className="cg-stat-label">CHECKS PASSED</span>
                     </div>
                     <div className="cg-stat-item">
-                      <span className="cg-stat-value">{issuesFound}</span>
+                      <span className="cg-stat-value align-middle">{issuesFound}</span>
                       <span className="cg-stat-label">ISSUES FOUND</span>
                     </div>
                     <div className="cg-stat-item">
@@ -1259,16 +1293,78 @@ export default function DashboardPage() {
                     )}
 
                     {/* Passed Checks Accordion */}
-                    <button
-                      type="button"
-                      className="cg-passed-toggle"
-                      onClick={() => setShowPassed(!showPassed)}
-                    >
-                      <div className="cg-passed-mark">✓</div>
-                      <span>
-                        {totalPassed} checks passed — {showPassed ? "hide details" : "show details"}
-                      </span>
-                    </button>
+                  <button
+  type="button"
+  onClick={() => setShowPassed(!showPassed)}
+  style={{
+    display: "inline-flex",
+    alignItems: "center",
+    gap: "9px",
+    padding: "6px 10px",
+    border: "none",
+    borderRadius: "8px",
+    background: "transparent",
+    color: "var(--text-secondary)",
+    fontSize: "13px",
+    fontWeight: 600,
+    cursor: "pointer",
+    transition: "background 0.2s ease",
+  }}
+>
+  <div
+    style={{
+      width: "24px",
+      height: "24px",
+      flexShrink: 0,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: "50%",
+      background: "rgba(34, 197, 94, 0.12)",
+      color: "#16a34a",
+      fontSize: "13px",
+      fontWeight: 800,
+    }}
+  >
+    ✓
+  </div>
+
+  <span style={{ display: "inline-flex", alignItems: "center", gap: "5px" }}>
+    <strong
+      style={{
+        color: "var(--text-primary)",
+        fontWeight: 800,
+      }}
+    >
+      {totalPassed}
+    </strong>
+
+    <span>checks passed</span>
+
+    <span
+      style={{
+        marginLeft: "3px",
+        color: "var(--text-primary)",
+        fontWeight: 700,
+        textDecoration: "underline",
+        textUnderlineOffset: "3px",
+      }}
+    >
+      {showPassed ? "Hide details" : "Show details"}
+    </span>
+
+    <span
+      style={{
+        fontSize: "14px",
+        lineHeight: 1,
+        transform: showPassed ? "rotate(180deg)" : "rotate(0deg)",
+        transition: "transform 0.2s ease",
+      }}
+    >
+      ↓
+    </span>
+  </span>
+</button>
 
                     {showPassed && (
                       <div className="cg-passed-list">

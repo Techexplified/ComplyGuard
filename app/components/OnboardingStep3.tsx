@@ -4,6 +4,32 @@ interface OnboardingStep3Props {
   isScanning?: boolean;
 }
 
+const sweepAnimationCss = `
+  .cg-scan-visual {
+    position: relative;
+    overflow: hidden;
+  }
+  .cg-scan-visual::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 100%;
+    width: 40%;
+    height: 100%;
+    background: linear-gradient(90deg, transparent, rgba(30, 152, 115, 0.16), transparent);
+    animation: sweepRTL 2.2s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes sweepRTL {
+    0% {
+      left: 100%;
+    }
+    100% {
+      left: -40%;
+    }
+  }
+`;
+
 export function OnboardingStep3({
   onBack,
   onScan,
@@ -11,6 +37,8 @@ export function OnboardingStep3({
 }: OnboardingStep3Props) {
   return (
     <main className="p-6 sm:p-10 md:p-12 md:pb-9">
+      <style dangerouslySetInnerHTML={{ __html: sweepAnimationCss }} />
+
       {/* Eyebrow */}
       <div className="text-xs font-bold tracking-[1.5px] text-[#c25e37] uppercase mb-2">
         SETUP · 2 OF 2
@@ -30,7 +58,7 @@ export function OnboardingStep3({
       {/* Center Showcase Container */}
       <div className="bg-[#fafafa] border border-zinc-200/90 rounded-2xl p-8 sm:p-10 flex flex-col items-center justify-center mb-6">
         {/* Floating Checklist Card */}
-        <div className="bg-white border border-zinc-200/80 rounded-2xl p-5 sm:px-7 sm:py-6 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.04)] w-full max-w-85 space-y-3.5">
+        <div className="cg-scan-visual bg-white border border-zinc-200/80 rounded-2xl p-5 sm:px-7 sm:py-6 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.04)] w-full max-w-85 space-y-3.5">
           {/* Check Item 1 */}
           <div className="flex items-center gap-3">
             <div className="w-5 h-5 rounded-full bg-[#faeae3] text-[#c25e37] flex items-center justify-center shrink-0">
