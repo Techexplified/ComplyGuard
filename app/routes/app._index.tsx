@@ -1075,11 +1075,11 @@ export default function DashboardPage() {
                           </div>
 
                           <div
-  className={`cg-hist-badge ${badgeClass}`}
-  style={{ "--score": `${scanItem.score * 3.6}deg` }}
->
-  <span>{scanItem.score}</span>
-</div>
+                            className={`cg-hist-badge ${badgeClass}`}
+                            style={{ "--score": `${scanItem.score * 3.6}deg` } as React.CSSProperties}
+                          >
+                            <span>{scanItem.score}</span>
+                          </div>
 
                           <div className="cg-hist-info">
                             <span className="cg-hist-title">{title}</span>

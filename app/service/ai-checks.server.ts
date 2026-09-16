@@ -261,6 +261,7 @@ export async function checkProductClaims(
       )
       .join("\n\n");
 
+    const structured = model.withStructuredOutput(ProductClaimsSchema);
     const result = await withTimeout(
       structured.invoke([
         {
