@@ -531,25 +531,67 @@ const css = `
     color: var(--ink-soft);
   }
 
-  .cg-passed-toggle {
-    display: flex;
+  .cg-passed-accordion-btn {
+    display: inline-flex;
     align-items: center;
     gap: 10px;
-    padding: 14px 4px;
-    cursor: pointer;
-    background: transparent;
-    border: none;
+    padding: 8px 14px;
+    margin-top: 12px;
+    background: #fbfaf7;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: var(--ink-soft);
     font-family: var(--body);
     font-size: 13px;
     font-weight: 500;
-    color: var(--ink);
+    cursor: pointer;
+    box-shadow: 0 1px 2px rgba(28, 26, 24, 0.04);
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    user-select: none;
+    text-align: left;
   }
-  .cg-passed-mark {
-    width: 18px; height: 18px; border-radius: 50%;
-    background: var(--ink);
-    display: flex; align-items: center; justify-content: center;
-    color: #fff; font-size: 10px;
+  .cg-passed-accordion-btn:hover {
+    background: #f3f0e8;
+    border-color: #d6cfc2;
+    color: var(--ink);
+    box-shadow: 0 2px 6px -1px rgba(28, 26, 24, 0.08);
+  }
+  .cg-passed-accordion-btn:active {
+    transform: scale(0.99);
+    background: #ece8dc;
+  }
+  .cg-passed-badge {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #ecfdf5;
+    border: 1.5px solid #a7f3d0;
+    color: #059669;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 800;
     flex-shrink: 0;
+  }
+  .cg-passed-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: #047857;
+    font-weight: 600;
+    font-size: 12px;
+    background: #ecfdf5;
+    border: 1px solid #d1fae5;
+    padding: 3px 9px;
+    border-radius: 7px;
+    margin-left: 6px;
+    transition: all 0.15s ease;
+  }
+  .cg-passed-accordion-btn:hover .cg-passed-action {
+    background: #d1fae5;
+    border-color: #a7f3d0;
+    color: #065f46;
   }
   .cg-passed-list {
     margin-top: 6px;
@@ -1292,79 +1334,81 @@ export default function DashboardPage() {
                       </div>
                     )}
 
-                    {/* Passed Checks Accordion */}
-                  <button
-  type="button"
-  onClick={() => setShowPassed(!showPassed)}
-  style={{
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "9px",
-    padding: "6px 10px",
-    border: "none",
-    borderRadius: "8px",
-    background: "transparent",
-    color: "var(--text-secondary)",
-    fontSize: "13px",
-    fontWeight: 600,
-    cursor: "pointer",
-    transition: "background 0.2s ease",
-  }}
->
-  <div
-    style={{
-      width: "24px",
-      height: "24px",
-      flexShrink: 0,
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      borderRadius: "50%",
-      background: "rgba(34, 197, 94, 0.12)",
-      color: "#16a34a",
-      fontSize: "13px",
-      fontWeight: 800,
-    }}
-  >
-    ✓
-  </div>
+                    {/* Passed Checks Bar */}
+                    <div
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "12px",
+                        padding: "6px 6px 6px 12px",
+                        marginTop: "12px",
+                        background: "#fbfaf7",
+                        border: "1px solid var(--line)",
+                        borderRadius: "10px",
+                        color: "var(--ink-soft)",
+                        fontFamily: "var(--body)",
+                        fontSize: "13px",
+                        fontWeight: 500,
+                      }}
+                    >
+                      {/* <div className="cg-passed-badge">
+                        ✓
+                      </div> */}
 
-  <span style={{ display: "inline-flex", alignItems: "center", gap: "5px" }}>
-    <strong
-      style={{
-        color: "var(--text-primary)",
-        fontWeight: 800,
-      }}
-    >
-      {totalPassed}
-    </strong>
+                      <span style={{ display: "inline-flex", alignItems: "center", gap: "5px" }}>
+                        <strong style={{ color: "var(--ink)", fontWeight: 700 }}>
+                          {totalPassed}
+                        </strong>
+                        <span>checks passed</span>
+                      </span>
 
-    <span>checks passed</span>
-
-    <span
-      style={{
-        marginLeft: "3px",
-        color: "var(--text-primary)",
-        fontWeight: 700,
-        textDecoration: "underline",
-        textUnderlineOffset: "3px",
-      }}
-    >
-      {showPassed ? "Hide details" : "Show details"}
-    </span>
-
-    <span
-      style={{
-        fontSize: "14px",
-        lineHeight: 1,
-        transform: showPassed ? "rotate(180deg)" : "rotate(0deg)",
-        transition: "transform 0.2s ease",
-      }}
-    >
-      ↓
-    </span>
-  </span>
-</button>
+                      <button
+                        type="button"
+                        onClick={() => setShowPassed(!showPassed)}
+                        aria-expanded={showPassed}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "5px",
+                          marginLeft: "6px",
+                          padding: "5px 12px",
+                          background: "var(--accent)",
+                          color: "#ffffff",
+                          fontSize: "12px",
+                          fontWeight: 600,
+                          fontFamily: "var(--body)",
+                          border: "none",
+                          borderRadius: "7px",
+                          cursor: "pointer",
+                          boxShadow: "0 1px 2px rgba(226, 97, 12, 0.25)",
+                          transition: "background 0.2s ease, transform 0.1s ease",
+                        }}
+                        // onMouseEnter={(e) => {
+                        //   e.currentTarget.style.background = "var(--accent-deep)";
+                        // }}
+                        // onMouseLeave={(e) => {
+                        //   e.currentTarget.style.background = "var(--accent)";
+                        // }}
+                      >
+                        <span>{showPassed ? "Hide details" : "Show details"}</span>
+                        <svg
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          style={{
+                            transform: showPassed ? "rotate(180deg)" : "rotate(0deg)",
+                            transition: "transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)",
+                          }}
+                        >
+                          <polyline points="6 9 12 15 18 9" />
+                        </svg>
+                      </button>
+                    </div>
 
                     {showPassed && (
                       <div className="cg-passed-list">
