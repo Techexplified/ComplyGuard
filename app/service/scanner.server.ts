@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import * as cheerio from "cheerio";
 import prisma from "../db.server";
 import {
@@ -46,6 +48,8 @@ export interface MonthlyScanUsage {
   resetsAt: string;
 }
 
+
+
 export async function getMonthlyScanUsage(shopDomain: string): Promise<MonthlyScanUsage> {
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
@@ -88,9 +92,6 @@ export async function runStorefrontComplianceScan({
     const elapsedSeconds =
       (Date.now() - new Date(shopRecord.lastScannedAt).getTime()) / 1000;
     if (elapsedSeconds < SCAN_DEBOUNCE_SECONDS) {
-      console.log(
-        `[Scanner] Debounce triggered for ${shopDomain}: last scan was ${elapsedSeconds.toFixed(1)}s ago. Returning latest scan.`
-      );
       const latestScan = await prisma.scan.findFirst({
         where: { shopId: shopDomain },
         orderBy: { createdAt: "desc" },
@@ -193,10 +194,6 @@ export async function runStorefrontComplianceScan({
     }
 
     try {
-      console.log(
-        `[Storefront Auth] STOREFRONT_PASSWORD detected in .env. Authenticating against ${targetUrl}/password...`
-      );
-
       // 1. Fetch password page to retrieve CSRF token and initial cookies
       const passPageRes = await fetch(`${targetUrl}/password`, {
         headers: baseHeaders,
@@ -258,9 +255,6 @@ export async function runStorefrontComplianceScan({
         .join("; ");
 
       if (finalCookieHeader) {
-        console.log(
-          `[Storefront Auth] Successfully acquired storefront session cookie. Unlocking password-protected store for audit.`
-        );
         return {
           ...baseHeaders,
           Cookie: finalCookieHeader,
@@ -297,13 +291,6 @@ export async function runStorefrontComplianceScan({
   if (homeRes.status === "fulfilled" && homeRes.value.ok) {
     try {
       homepageHtml = await homeRes.value.text();
-      console.log(
-        `\n============================================================\n` +
-        `[FETCHED HOMEPAGE HTML] URL: ${storeUrl} (${homepageHtml.length} characters)\n` +
-        `============================================================`
-      );
-      console.log(homepageHtml);
-      console.log(`==================== [END HOMEPAGE HTML] ====================\n`);
     } catch (e) {
       console.error("Failed to read homepage HTML text:", e);
     }
@@ -323,18 +310,9 @@ export async function runStorefrontComplianceScan({
   if (contactRes.status === "fulfilled" && contactRes.value.ok) {
     try {
       contactPageHtml = await contactRes.value.text();
-      console.log(
-        `\n============================================================\n` +
-        `[FETCHED CONTACT PAGE HTML] URL: ${storeUrl}/pages/contact (${contactPageHtml.length} characters)\n` +
-        `============================================================`
-      );
-      console.log(contactPageHtml);
-      console.log(`==================== [END CONTACT PAGE HTML] ====================\n`);
     } catch (e) {
       console.error("Failed to read contact page HTML text:", e);
     }
-  } else {
-    console.log(`[Storefront Fetch] Contact page not found or non-200 at ${storeUrl}/pages/contact`);
   }
 
   const $home = cheerio.load(homepageHtml);
@@ -352,7 +330,6 @@ export async function runStorefrontComplianceScan({
     try {
       const res = await fetch(url, { headers: storefrontHeaders });
       if (!res.ok) {
-        console.log(`[Policy Fetch] ${url} returned HTTP ${res.status}`);
         return { exists: false, html: "", text: "" };
       }
       const html = await res.text();
@@ -413,15 +390,12 @@ export async function runStorefrontComplianceScan({
 
     // ── Stage 1: native /policies/<slug> ──────────────────────────────────
     const nativeUrl = `${storeUrl}/policies/${slug}`;
-    console.log(`[Policy Fetch | Stage 1] Trying native route: ${nativeUrl}`);
     const nativeResult = await fetchUrl(nativeUrl);
     if (nativeResult.exists) {
-      console.log(`[Policy Fetch | Stage 1] FOUND at ${nativeUrl}`);
       return nativeResult;
     }
 
     // ── Stage 2: footer / homepage link discovery ─────────────────────────
-    console.log(`[Policy Fetch | Stage 2] Scanning homepage links for keywords: ${keywords.join(", ")}`);
     const discoveredUrls = new Set<string>();
 
     $home("a").each((_, el) => {
@@ -443,10 +417,8 @@ export async function runStorefrontComplianceScan({
     });
 
     for (const url of discoveredUrls) {
-      console.log(`[Policy Fetch | Stage 2] Probing discovered link: ${url}`);
       const result = await fetchUrl(url);
       if (result.exists) {
-        console.log(`[Policy Fetch | Stage 2] FOUND at ${url}`);
         return result;
       }
     }
@@ -454,15 +426,12 @@ export async function runStorefrontComplianceScan({
     // ── Stage 3: common /pages/* slug probing ─────────────────────────────
     for (const fallback of fallbackSlugs) {
       const url = `${storeUrl}/pages/${fallback}`;
-      console.log(`[Policy Fetch | Stage 3] Probing fallback slug: ${url}`);
       const result = await fetchUrl(url);
       if (result.exists) {
-        console.log(`[Policy Fetch | Stage 3] FOUND at ${url}`);
         return result;
       }
     }
 
-    console.log(`[Policy Fetch] Policy "${slug}" not found on any route.`);
     return { exists: false, html: "", text: "" };
   }
 
@@ -506,23 +475,25 @@ export async function runStorefrontComplianceScan({
   const addressCandidateText = `${footerAddressText}\n${contactAddressText}`.trim();
 
   // =============================================================
-  // AI PRE-CHECKS (Parallel) — Results used in checks 2, 9, 15
+  // AI PRE-CHECKS (Sequential / In Series) — Results used in checks 2, 9, 15
   // =============================================================
-  console.log("[Scanner] Running AI pre-checks in parallel (checks 2, 9, 15)...");
-  const [aiPolicyResult, aiAddressResult, aiClaimsResult] = await Promise.all([
-    // Check 2: Policy quality
-    checkPolicyQuality(refundData.exists ? refundData.text : ""),
-    // Check 9: Physical address
-    checkPhysicalAddress(addressCandidateText || `${homepageHtml} ${contactPageHtml}`),
-    // Check 15: Product claims
-    checkProductClaims(
-      products.map((p: { title: string; descriptionHtml: string }) => ({
-        title: p.title,
-        description: p.descriptionHtml || "",
-      }))
-    ),
-  ]);
-  console.log("[Scanner] AI pre-checks complete.");
+  // Check 2: Policy quality (only evaluated if refund policy exists)
+  const aiPolicyResult = refundData.exists
+    ? await checkPolicyQuality(refundData.text)
+    : { pass: false, reason: "Refund policy not found", missingElements: [] };
+
+  // Check 9: Physical address
+  const aiAddressResult = await checkPhysicalAddress(
+    addressCandidateText || `${homepageHtml} ${contactPageHtml}`
+  );
+
+  // Check 15: Product claims
+  const aiClaimsResult = await checkProductClaims(
+    products.map((p: { title: string; descriptionHtml: string }) => ({
+      title: p.title,
+      description: p.descriptionHtml || "",
+    }))
+  );
 
   // =============================================================
   // CATEGORY 1: POLICY PAGES (6 Checks)
@@ -634,13 +605,13 @@ export async function runStorefrontComplianceScan({
     footerSections.first().html() ||
     "No footer element found";
 
-  console.log(
-    `\n============================================================\n` +
-    `[EXTRACTED FOOTER HTML FOR POLICY & PAYMENT CHECKS]\n` +
-    `============================================================\n` +
-    realFooterHtml +
-    `\n==================== [END EXTRACTED FOOTER HTML] ====================\n`
-  );
+  // console.log(
+  //   `\n============================================================\n` +
+  //   `[EXTRACTED FOOTER HTML FOR POLICY & PAYMENT CHECKS]\n` +
+  //   `============================================================\n` +
+  //   realFooterHtml +
+  //   `\n==================== [END EXTRACTED FOOTER HTML] ====================\n`
+  // );
 
   const footerHrefsList: string[] = [];
   footerSections.find("a").each((_, el) => {
@@ -751,6 +722,17 @@ export async function runStorefrontComplianceScan({
 
   // Check 9: Physical business address present
   // ── Now powered by GPT-4o-mini NER (falls back to keyword check if no API key) ──
+  // try {
+  //   const contactFilePath = path.resolve(process.cwd(), "contact-page.html");
+  //   await fs.writeFile(
+  //     contactFilePath,
+  //     contactPageHtml || `<!-- Contact page at ${storeUrl}/pages/contact returned empty content -->`,
+  //     "utf-8"
+  //   );
+  // } catch (err) {
+  //   console.error("Failed to save contact-page.html:", err);
+  // }
+
   if (aiAddressResult.pass) {
     passedChecks++;
   } else {
@@ -1068,10 +1050,6 @@ export async function runStorefrontComplianceScan({
       },
     }),
   ]);
-
-  console.log(
-    `[Scanner] Completed 18 checks for ${shopDomain}. Score: ${score}/100. Passed: ${passedChecks}/18. Issues: ${issues.length}.`
-  );
 
   return { score, passedChecks, totalChecks, categoryScores, issues };
 }

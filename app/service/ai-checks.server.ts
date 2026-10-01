@@ -13,10 +13,13 @@
  */
 
 import { ChatOpenAI } from "@langchain/openai";
+import path from "node:path";
 import { z } from "zod";
-
+import fs from "node:fs/promises";
 // ─────────────────────────────────────────────────────────────────
 // Shared LangChain model factory
+const AI_TIMEOUT_MS = parseInt(process.env.AI_TIMEOUT_MS || "35000", 10);
+
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   let timer: NodeJS.Timeout;
   const timeoutPromise = new Promise<T>((resolve) => {
@@ -31,6 +34,202 @@ function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T
   });
 }
 
+// ---------------------------------------------------------------------------
+// cleanPageText
+// ---------------------------------------------------------------------------
+// Turns messy scraper output (visible text + leftover <script>/JSON-LD/JS
+// snippets + stripped punctuation) into clean, human-readable text.
+// ---------------------------------------------------------------------------
+export function cleanPageText(raw: string): string {
+  if (!raw) return "";
+  let text = raw;
+
+  // --- 0. Normalise line endings -------------------------------------------
+  text = text.replace(/\r\n?/g, "\n");
+
+  // --- 1. Remove JSON-LD / inline JSON schema blocks -----------------------
+  text = text.replace(/\{\s*"@context"[\s\S]*?\}\s*/g, " ");
+
+  // --- 2. Remove <script> and <style> blocks (in case HTML is still present)
+  text = text.replace(/<script[\s\S]*?<\/script>/gi, " ");
+  text = text.replace(/<style[\s\S]*?<\/style>/gi, " ");
+  text = text.replace(/<!--[\s\S]*?-->/g, " ");
+  text = text.replace(/<[^>]+>/g, " ");
+
+  // --- 3. Remove JS block comments ----------------------------------------
+  text = text.replace(/\/\*[\s\S]*?\*\//g, " ");
+
+  // --- 4. Remove JS line comments (// ...) --------------------------------
+  //     Keep the newline so we don't merge unrelated lines.
+  text = text.replace(/(^|\s)\/\/[^\n]*/g, "$1 ");
+
+  // --- 5. Remove `window.__X__ = ...` config blobs ------------------------
+  //     Loose: stops at the next capitalised key or end-of-line.
+  text = text.replace(
+    /window\.__[A-Z0-9_]+__[\s\S]*?(?=\n|(?:\b[A-Z][a-zA-Z]+\s*:)|$)/g,
+    " "
+  );
+
+  // --- 6. Remove `await import(...)` and static `import ... from "..."` ---
+  text = text.replace(/await\s+import\s*\([^)]*\)\s*;?/g, " ");
+  text = text.replace(
+    /import\s+\{[^}]*\}\s+from\s+['"][^'"]+['"]\s*;?/g,
+    " "
+  );
+  text = text.replace(
+    /import\s+[^;]+?\s+from\s+['"][^'"]+['"]\s*;?/g,
+    " "
+  );
+
+  // --- 7. Remove IIFEs: (function(){...})() ------------------------------
+  text = text.replace(
+    /\(function\s*\([^)]*\)\s*\{[\s\S]*?\}\s*\)\s*\([^)]*\)\s*;?/g,
+    " "
+  );
+
+  // --- 8. Remove common JS statement shapes -------------------------------
+  //     These run AFTER punctuation may have been stripped by earlier
+  //     cleaners, so we make them tolerant of missing {} () ; " '.
+  text = text.replace(
+    /\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*=\s*[^\n.;]*[.;]?/g,
+    " "
+  );
+  text = text.replace(
+    /\bfunction\s+[A-Za-z_$][\w$]*\s*\([^)]*\)\s*\{?/g,
+    " "
+  );
+  text = text.replace(/\bfor\s*\([^)]*\)\s*\{?/g, " ");
+  text = text.replace(/\bif\s*\([^)]*\)\s*\{?/g, " ");
+  text = text.replace(/\belse\s*\{?/g, " ");
+  text = text.replace(/\breturn\b[^\n.;]*[.;]?/g, " ");
+  text = text.replace(/\bnew\s+URL\s*\([^)]*\)\s*;?/g, " ");
+  text = text.replace(/\bnew\s+[A-Z]\w*\s*\([^)]*\)\s*;?/g, " ");
+  text = text.replace(/\bhydrate\s*\([^)]*\)\s*;?/g, " ");
+  text = text.replace(/\bdocument\.[^\n.;]*[.;]?/g, " ");
+  text = text.replace(/\bwindow\.[^\n.;]*[.;]?/g, " ");
+
+  // --- 9. Remove URLs ------------------------------------------------------
+  text = text.replace(/https?:\/\/\S+/g, " ");
+  text = text.replace(/\/\/[a-z0-9.-]+\.[a-z]{2,}\S*/gi, " ");
+
+  // --- 10. Remove stray code punctuation runs -----------------------------
+  //     Careful: we keep , . : - ( ) since addresses use them.
+  text = text.replace(/[{};]+/g, " ");
+  text = text.replace(/[<>`~^|\\]+/g, " ");
+  text = text.replace(/[\[\]]+/g, " ");
+  text = text.replace(/\s*=\s*/g, " ");
+
+  // --- 11. Drop code-identifier fragments ---------------------------------
+  //     Removes sentences made mostly of camelCase / snake_case / keywords.
+  const CODE_WORD =
+    /^(?:const|let|var|function|return|if|else|for|while|new|class|true|false|null|undefined)$/;
+  text = text
+    .split(/(?<=[.!?])\s+|\n+/)
+    .filter((frag) => {
+      const t = frag.trim();
+      if (t.length < 2) return false;
+      const words = t.split(/\s+/);
+      if (words.length === 0) return false;
+      let codeish = 0;
+      for (const w of words) {
+        if (
+          /^[a-z][a-z0-9]*[A-Z]/.test(w) || // camelCase
+          /_/.test(w) ||                     // snake_case
+          CODE_WORD.test(w)                  // keyword
+        ) {
+          codeish++;
+        }
+      }
+      return codeish / words.length < 0.34; // keep human-looking fragments
+    })
+    .join(" ");
+
+  // --- 12. Collapse whitespace --------------------------------------------
+  text = text.replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n").trim();
+
+  return text;
+}
+
+// ---------------------------------------------------------------------------
+// dedupeSentences
+// ---------------------------------------------------------------------------
+// Shopify renders header/footer twice. Collapse identical sentences/fragments.
+// ---------------------------------------------------------------------------
+export function dedupeSentences(text: string): string {
+  const seen = new Set<string>();
+  const parts = text
+    .split(/(?<=[.!?])\s+|\n+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const out: string[] = [];
+  for (const p of parts) {
+    const key = p.toLowerCase().replace(/\s+/g, " ");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(p);
+  }
+  return out.join(" ");
+}
+
+// ---------------------------------------------------------------------------
+// extractAddressCandidates
+// ---------------------------------------------------------------------------
+// Finds address-like spans in raw text. Works even on messy input.
+// ---------------------------------------------------------------------------
+export function extractAddressCandidates(raw: string): string[] {
+  if (!raw) return [];
+  const results = new Set<string>();
+
+  // Pattern A: number + street name + street type [+ optional rest]
+  const PATTERN_A =
+    /\b\d{1,6}\s+[A-Za-z0-9.'\-]+(?:\s+[A-Za-z0-9.'\-]+){0,4}?\s+(?:street|st|road|rd|avenue|ave|boulevard|blvd|lane|ln|drive|dr|court|ct|way|place|pl|terrace|ter|highway|hwy|parkway|pkwy|circle|cir|square|sq)\.?\b[\s\S]{0,140}?(?:\b\d{5}(?:-\d{4})?\b|\b[A-Z]{2}\b|\b[A-Z][a-z]+,\s*[A-Z]{2}\b|$)/gi;
+
+  // Pattern B: PO Box
+  const PATTERN_B = /\bp\.?\s*o\.?\s*box\s+\d+[\w\s,.-]{0,80}/gi;
+
+  // Pattern C: Suite / Floor / Building + number (must be near a number)
+  const PATTERN_C =
+    /\b(?:suite|ste|floor|fl|building|bldg|unit|apt|apartment)\s*#?\s*\d+[A-Za-z]?\b[\s\S]{0,80}/gi;
+
+  for (const re of [PATTERN_A, PATTERN_B, PATTERN_C]) {
+    for (const m of raw.matchAll(re)) {
+      const val = m[0].replace(/\s+/g, " ").trim();
+      if (val.length >= 10) results.add(val);
+    }
+  }
+
+  // Merge overlapping/near-duplicate spans by simple containment check
+  const arr = [...results].sort((a, b) => b.length - a.length);
+  const merged: string[] = [];
+  for (const cand of arr) {
+    if (!merged.some((m) => m.includes(cand) || cand.includes(m))) {
+      merged.push(cand);
+    }
+  }
+  return merged;
+}
+
+// ---------------------------------------------------------------------------
+// preparePageText
+// ---------------------------------------------------------------------------
+// Full pipeline: clean → dedupe → (optionally) keep address candidates.
+// ---------------------------------------------------------------------------
+export function preparePageText(raw: string): string {
+  const cleaned = cleanPageText(raw);
+  const deduped = dedupeSentences(cleaned);
+
+  // Optionally append a focused address section so the AI always sees it,
+  // even if it sits past the 4000-char window.
+  const candidates = extractAddressCandidates(raw);
+  const addressBlock =
+    candidates.length > 0
+      ? `\n\n[address candidates]\n${candidates.join("\n")}`
+      : "";
+
+  return (deduped + addressBlock).trim();
+}
+
 function getModel() {
   const apiKey = process.env.OPENROUTER_API_KEY?.trim();
   if (!apiKey) return null;
@@ -42,7 +241,7 @@ function getModel() {
     temperature: 0,
     apiKey: apiKey,
     maxTokens: 800,
-    timeout: 12000,
+    timeout: AI_TIMEOUT_MS,
     maxRetries: 1,
     configuration: {
       baseURL: "https://openrouter.ai/api/v1",
@@ -66,6 +265,101 @@ const PolicyQualitySchema = z.object({
 
 export type PolicyQualityResult = z.infer<typeof PolicyQualitySchema>;
 
+// ---------------------------------------------------------------------------
+// extractRelevantPolicyText
+// ---------------------------------------------------------------------------
+// Extracts compliance-critical sections from refund policies (timeframes,
+// item conditions, fees, shipping, exceptions) while dropping boilerplate.
+// Ensures high-signal text fits safely into compact LLM context windows.
+// ---------------------------------------------------------------------------
+export function extractRelevantPolicyText(raw: string, maxChars = 2000): string {
+  if (!raw) return "";
+
+  const cleaned = cleanPageText(raw).trim();
+  if (cleaned.length <= maxChars) {
+    return cleaned;
+  }
+
+  // Split into paragraphs; fallback to sentence boundaries if page is single-block
+  let units = cleaned
+    .split(/\n+/)
+    .map((u) => u.trim())
+    .filter(Boolean);
+
+  if (units.length <= 2) {
+    units = cleaned
+      .split(/(?<=[.!?])\s+/)
+      .map((u) => u.trim())
+      .filter(Boolean);
+  }
+
+  const keywords = [
+    "day",
+    "days",
+    "timeframe",
+    "window",
+    "month",
+    "week",
+    "return",
+    "returns",
+    "refund",
+    "refunds",
+    "exchange",
+    "exchanges",
+    "condition",
+    "unused",
+    "unworn",
+    "unopened",
+    "original packaging",
+    "packaging",
+    "tag",
+    "tags",
+    "receipt",
+    "proof of purchase",
+    "eligib",
+    "shipping",
+    "postage",
+    "label",
+    "fee",
+    "fees",
+    "restock",
+    "cost",
+    "damage",
+    "damaged",
+    "defect",
+    "defective",
+    "non-returnable",
+    "final sale",
+  ];
+
+  const matched: string[] = [];
+  let totalLength = 0;
+
+  for (const unit of units) {
+    const lower = unit.toLowerCase();
+    const isRelevant = keywords.some((kw) => lower.includes(kw));
+
+    if (isRelevant) {
+      if (totalLength + unit.length > maxChars) {
+        const remaining = maxChars - totalLength;
+        if (remaining > 60) {
+          matched.push(unit.slice(0, remaining));
+        }
+        break;
+      }
+      matched.push(unit);
+      totalLength += unit.length + 2;
+    }
+  }
+
+  // If keyword filtering matched nothing, return the beginning of the cleaned text
+  if (matched.length === 0) {
+    return cleaned.slice(0, maxChars);
+  }
+
+  return matched.join("\n\n");
+}
+
 export async function checkPolicyQuality(policyText: string): Promise<PolicyQualityResult> {
   const fallbackCheck = () => {
     const text = policyText.toLowerCase();
@@ -85,6 +379,7 @@ export async function checkPolicyQuality(policyText: string): Promise<PolicyQual
       missingElements: pass ? [] : ["return timeframe", "item conditions"],
     };
   };
+  
 
   const model = getModel();
   if (!model) {
@@ -95,6 +390,8 @@ export async function checkPolicyQuality(policyText: string): Promise<PolicyQual
   try {
     const structured = model.withStructuredOutput(PolicyQualitySchema);
     console.log("[AI-Check 2] Evaluating refund policy quality via GPT-4o-mini");
+
+    const focusedPolicyText = extractRelevantPolicyText(policyText, 2500);
 
     const result = await withTimeout(
       structured.invoke([
@@ -108,9 +405,9 @@ Evaluate the refund/return policy against these mandatory requirements:
 4. Ideally states who pays return shipping costs
 Be strict but fair. A policy mentioning "30 days" and "unused" is sufficient to pass.`,
         },
-        { role: "user", content: `Refund policy text:\n\n${policyText.slice(0, 3000)}` },
+        { role: "user", content: `Refund policy text:\n\n${focusedPolicyText}` },
       ]) as Promise<PolicyQualityResult>,
-      12000,
+      AI_TIMEOUT_MS,
       fallbackCheck()
     );
 
@@ -138,6 +435,18 @@ const AddressDetectionSchema = z.object({
 export type AddressDetectionResult = z.infer<typeof AddressDetectionSchema>;
 
 export async function checkPhysicalAddress(pageText: string): Promise<AddressDetectionResult> {
+
+  let newText:string=preparePageText(pageText)
+//   try {
+//   const contactFilePath = path.resolve(process.cwd(), "contact-page.txt");
+//   await fs.writeFile(
+//     contactFilePath,
+//     newText,
+//     "utf-8"
+//   );
+// } catch (err) {
+//   console.error("Failed to save contact-page.html:", err);
+// }
   const fallbackCheck = () => {
     const ADDRESS_TERMS = [
       "street", " st.", "road", " rd.", "avenue", " ave.",
@@ -149,7 +458,7 @@ export async function checkPhysicalAddress(pageText: string): Promise<AddressDet
     return {
       pass,
       detectedAddress: "",
-      reason: pass ? "Physical address detected on storefront" : "No physical business address detected on storefront",
+      reason: pass ? "[Fall back] Physical address detected on storefront" : "[Fall back] No physical business address detected on storefront",
     };
   };
 
@@ -172,9 +481,9 @@ Scan the webpage text and determine whether a physical mailing or business locat
 A valid address includes a street number, street name, city, and optionally a postal/zip code or country.
 PO Box addresses also count. Do NOT count email addresses or URLs.`,
         },
-        { role: "user", content: `Webpage text:\n\n${pageText.slice(0, 4000)}` },
+        { role: "user", content: `Webpage text:\n\n${newText.slice(0, 4000)}` },
       ]) as Promise<AddressDetectionResult>,
-      12000,
+      AI_TIMEOUT_MS,
       fallbackCheck()
     );
 
@@ -218,7 +527,7 @@ export async function checkProductClaims(
     return { pass: true, flagged: [], reason: "No products to scan" };
   }
 
-  const fallbackCheck = () => {
+const fallbackCheck = () => {
     const RISKY = [
       "best deal ever", "lowest price guaranteed", "miracle cure",
       "100% cure", "unbeatable price", "number 1 in the world",
@@ -261,6 +570,10 @@ export async function checkProductClaims(
       )
       .join("\n\n");
 
+      // Check 9: Physical business address present
+
+
+
     const structured = model.withStructuredOutput(ProductClaimsSchema);
     const result = await withTimeout(
       structured.invoke([
@@ -278,7 +591,7 @@ Flag only genuine violations. Do not flag normal product descriptions.`,
         },
         { role: "user", content: `Product listings:\n\n${productList}` },
       ]) as Promise<ProductClaimsResult>,
-      12000,
+      AI_TIMEOUT_MS,
       fallbackCheck()
     );
 
