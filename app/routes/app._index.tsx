@@ -148,23 +148,62 @@ const ALL_18_CHECKS = [
   { ruleCode: "SSL_SECURE_CHECKOUT", label: "Active SSL / secure checkout", category: "TRUST_SIGNALS", groupName: "Checkout & trust" },
 ];
 
-function getShopifyDeepLink(ruleCode: string, shopDomain: string): string {
-  const cleanDomain = shopDomain.replace(".myshopify.com", "");
-  const base = `https://admin.shopify.com/store/${cleanDomain}`;
+export interface ShopifyDeepLink {
+  adminPath: string;
+  fullUrl: string;
+  protocolUrl: string;
+  label: string;
+}
 
-  if (ruleCode.startsWith("REFUND") || ruleCode.startsWith("SHIPPING") || ruleCode.startsWith("PRIVACY") || ruleCode.startsWith("TERMS")) {
-    return `${base}/settings/legal`;
+function getShopifyDeepLink(ruleCode: string, shopDomain: string): ShopifyDeepLink {
+  const cleanDomain = (shopDomain || "").replace(".myshopify.com", "");
+  const base = `https://admin.shopify.com/store/${cleanDomain}`;
+  let adminPath = "";
+  let label = "Shopify Settings";
+
+  if (
+    ruleCode.startsWith("REFUND") ||
+    ruleCode.startsWith("SHIPPING") ||
+    ruleCode.startsWith("PRIVACY") ||
+    ruleCode.startsWith("TERMS")
+  ) {
+    adminPath = "settings/policies";
+    label = "Policies";
+  } else if (ruleCode === "POLICIES_NOT_IN_FOOTER") {
+    adminPath = "menus";
+    label = "Navigation Menus";
+  } else if (
+    ruleCode.includes("ADDRESS") ||
+    ruleCode.includes("PHONE") ||
+    ruleCode.includes("BUSINESS_NAME") ||
+    ruleCode.includes("EMAIL")
+  ) {
+    adminPath = "settings/general";
+    label = "Store Details";
+  } else if (
+    ruleCode.includes("GTIN") ||
+    ruleCode.includes("PRICE") ||
+    ruleCode.includes("IMAGE") ||
+    ruleCode.includes("PROMOTIONAL") ||
+    ruleCode.includes("INVENTORY")
+  ) {
+    adminPath = "products";
+    label = "Products";
+  } else if (ruleCode === "PAYMENT_METHODS_NOT_VISIBLE") {
+    adminPath = "themes/current/editor";
+    label = "Theme Customizer";
+  } else if (ruleCode === "SSL_SECURE_CHECKOUT") {
+    adminPath = "settings/domains";
+    label = "Domains";
+  } else {
+    adminPath = "";
+    label = "Shopify Admin";
   }
-  if (ruleCode === "POLICIES_NOT_IN_FOOTER") return `${base}/menus`;
-  if (ruleCode.includes("ADDRESS") || ruleCode.includes("PHONE") || ruleCode.includes("BUSINESS_NAME") || ruleCode.includes("EMAIL")) {
-    return `${base}/settings/general`;
-  }
-  if (ruleCode.includes("GTIN") || ruleCode.includes("PRICE") || ruleCode.includes("IMAGE") || ruleCode.includes("PROMOTIONAL") || ruleCode.includes("INVENTORY")) {
-    return `${base}/products`;
-  }
-  if (ruleCode === "PAYMENT_METHODS_NOT_VISIBLE") return `${base}/themes/current/editor`;
-  if (ruleCode === "SSL_SECURE_CHECKOUT") return `${base}/settings/domains`;
-  return base;
+
+  const fullUrl = adminPath ? `${base}/${adminPath}` : base;
+  const protocolUrl = adminPath ? `shopify://admin/${adminPath}` : "shopify://admin";
+
+  return { adminPath, fullUrl, protocolUrl, label };
 }
 
 function timeAgo(dateInput?: Date | string | null): string {
@@ -1038,7 +1077,35 @@ export default function DashboardPage() {
   const [passwordBannerDismissed, setPasswordBannerDismissed] = useState(false);
 
   const cleanDomain = (shopDomain || "").replace(".myshopify.com", "");
-  const preferencesUrl = `https://admin.shopify.com/store/${cleanDomain}/online_store/preferences`;
+  const preferencesLink: ShopifyDeepLink = {
+    adminPath: "online_store/preferences",
+    fullUrl: `https://admin.shopify.com/store/${cleanDomain}/online_store/preferences`,
+    protocolUrl: "shopify://admin/online_store/preferences",
+    label: "Preferences",
+  };
+
+  const handleShopifyNavigate = (
+    e: React.MouseEvent<HTMLAnchorElement>,
+    link: ShopifyDeepLink
+  ) => {
+    if (typeof window !== "undefined") {
+      const isEmbedded = window.top !== window;
+      if (isEmbedded) {
+        e.preventDefault();
+        try {
+          window.open(link.protocolUrl, "_top");
+          return;
+        } catch {
+          try {
+            window.open(link.fullUrl, "_top");
+            return;
+          } catch {
+            // fallback
+          }
+        }
+      }
+    }
+  };
 
   const scans = shop.scans || [];
   const allIssues = shop.issues || [];
@@ -1329,10 +1396,11 @@ export default function DashboardPage() {
                     </div>
                     <div className="cg-locked-actions">
                       <a
-                        href={preferencesUrl}
-                        target="_blank"
+                        href={preferencesLink.fullUrl}
+                        target="_top"
                         rel="noopener noreferrer"
                         className="cg-locked-btn"
+                        onClick={(e) => handleShopifyNavigate(e, preferencesLink)}
                       >
                         Remove Password in Shopify →
                       </a>
@@ -1459,7 +1527,14 @@ export default function DashboardPage() {
                             <button type="button" className="cg-issue-title" onClick={() => setExpandedIssueId(isExpanded ? null : issue.id)}>{issue.title}</button>
                             <button type="button" className="cg-issue-desc" onClick={() => setExpandedIssueId(isExpanded ? null : issue.id)}>{issue.description}</button>
                             <span className="cg-issue-cat">{categoryDisplay}</span>
-                            <a href={deepLink} target="_blank" rel="noopener noreferrer" className="cg-fix-btn">
+                            <a
+                              href={deepLink.fullUrl}
+                              target="_top"
+                              rel="noopener noreferrer"
+                              className="cg-fix-btn"
+                              onClick={(e) => handleShopifyNavigate(e, deepLink)}
+                              title={`Open ${deepLink.label} in Shopify`}
+                            >
                               Fix in Shopify →
                             </a>
                           </div>
@@ -1473,6 +1548,18 @@ export default function DashboardPage() {
                               <div>
                                 <strong>How to resolve: </strong>
                                 <span className="cg-expanded-guide">{issue.fixGuide}</span>
+                              </div>
+                              <div style={{ marginTop: 8, display: "flex", gap: 10 }}>
+                                <a
+                                  href={deepLink.fullUrl}
+                                  target="_top"
+                                  rel="noopener noreferrer"
+                                  className="cg-fix-btn"
+                                  style={{ background: "#ea580c", color: "#ffffff" }}
+                                  onClick={(e) => handleShopifyNavigate(e, deepLink)}
+                                >
+                                  Open {deepLink.label} in Shopify →
+                                </a>
                               </div>
                               {/* <div style={{ display: "flex", gap: 10, marginTop: 4 }}>
                                 <a
