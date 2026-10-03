@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import * as cheerio from "cheerio";
 import prisma from "../db.server";
 import {
@@ -27,6 +25,66 @@ export interface IssueResult {
   fixGuide: string;
 }
 
+export const RULE_FIX_GUIDES: Record<string, string> = {
+  REFUND_POLICY_EXISTS:
+    "1. In Shopify Admin, go to Settings > Policies, draft your Refund Policy, and click Save.\n2. In Online Store > Navigation, click 'Footer menu', add a menu item linking to Policies > Refund policy, and click Save menu so it is visible in your storefront footer.\n3. If your store has a password enabled, go to Online Store > Preferences and disable password protection so visitors and crawlers can access your policy.",
+
+  REFUND_POLICY_DISCLOSURE_INCOMPLETE:
+    "1. In Shopify Admin, go to Settings > Policies and review your Refund Policy.\n2. Clearly disclose return timeframes (e.g. 30 days), eligible item conditions (e.g. unworn, original packaging), and who pays return shipping costs.\n3. Verify on your live storefront (/policies/refund-policy) that the updated disclosures appear.",
+
+  SHIPPING_POLICY_EXISTS:
+    "1. In Shopify Admin, go to Settings > Policies, draft your Shipping Policy (including handling times, transit times, and shipping rates), and click Save.\n2. To make it visible on your storefront, go to Online Store > Navigation > Footer menu. Click 'Add menu item', select 'Policies' > 'Shipping policy', and click Save menu.\n3. If your store has a password enabled, go to Online Store > Preferences and disable password protection so visitors and Google Merchant Center crawlers can access /policies/shipping-policy.",
+
+  PRIVACY_POLICY_EXISTS:
+    "1. In Shopify Admin, go to Settings > Policies, draft your Privacy Policy, and click Save.\n2. To publish it on your storefront, go to Online Store > Navigation > Footer menu. Click 'Add menu item', select 'Policies' > 'Privacy policy', and click Save menu.\n3. Ensure storefront password protection is disabled under Online Store > Preferences.",
+
+  TERMS_POLICY_EXISTS:
+    "1. In Shopify Admin, go to Settings > Policies, draft your Terms of Service, and click Save.\n2. To publish it on your storefront, go to Online Store > Navigation > Footer menu. Click 'Add menu item', select 'Policies' > 'Terms of service', and click Save menu.\n3. Ensure storefront password protection is disabled under Online Store > Preferences.",
+
+  POLICIES_NOT_IN_FOOTER:
+    "1. In Shopify Admin, go to Online Store > Navigation and click on 'Footer menu'.\n2. Click 'Add menu item', select 'Policies', and add your policies (Refund, Privacy, Terms of Service, Shipping).\n3. Click Save menu and check your storefront footer to verify the policy links are visible to visitors and crawlers.",
+
+  PHONE_NUMBER_VISIBLE:
+    "1. In Shopify Admin, go to Online Store > Themes > Customize (or Online Store > Pages > Contact).\n2. Add a visible customer support phone number with a clickable link (e.g. <a href='tel:+1...'>Call Us</a>) in your storefront footer or Contact page.\n3. Click Save to publish your storefront changes.",
+
+  EMAIL_OR_FORM_VISIBLE:
+    "1. In Shopify Admin, go to Online Store > Themes > Customize (or Online Store > Pages > Contact).\n2. Display your customer support email address or add a Contact Form block on your storefront footer or Contact page.\n3. Click Save to publish changes to your storefront.",
+
+  PHYSICAL_ADDRESS_VISIBLE:
+    "1. In Shopify Admin, go to Online Store > Themes > Customize (or Online Store > Pages > Contact).\n2. Add your physical business address to your storefront footer text block or Contact Us page.\n3. Click Save and confirm it is visible to shoppers and crawlers on your storefront.",
+
+  BUSINESS_NAME_MISMATCH:
+    "1. In Shopify Admin, check your official store name under Settings > General.\n2. In Online Store > Themes > Customize, update your storefront header title/logo and footer copyright text to match your official store name.",
+
+  MERCHANT_CENTER_ADDRESS_VERIFY:
+    "1. In Google Merchant Center > Business information, confirm your registered business address.\n2. In Online Store > Themes > Customize, ensure the exact same address is displayed on your storefront Contact Us page or footer.",
+
+  MISSING_GTIN_BARCODE:
+    "1. In Shopify Admin, go to Products and open each flagged product variant.\n2. Under Inventory, enter a valid barcode (GTIN, UPC, EAN, or ISBN) for each variant.\n3. Click Save so your product feed syncs with Google Merchant Center.",
+
+  PRICE_MISMATCH_FEED:
+    "1. In Shopify Admin, go to Products and verify that catalog prices match what shoppers see on your live storefront.\n2. Review any currency conversion or automatic discount apps that may cause live prices to differ from your catalog feed.",
+
+  MISSING_PRODUCT_IMAGES:
+    "1. In Shopify Admin, go to Products.\n2. Upload clear, high-resolution product images for all active products (avoid placeholders).\n3. Click Save to ensure products display properly on your storefront and ad listings.",
+
+  RISKY_PROMOTIONAL_LANGUAGE:
+    "1. In Shopify Admin, go to Products and open the flagged products.\n2. Edit product descriptions to remove unverified guarantees, absolute medical claims, or competitor disparagement.\n3. Click Save to update your storefront listings.",
+
+  INVENTORY_AVAILABILITY_MISMATCH:
+    "1. In Shopify Admin, go to Products > Inventory and confirm stock tracking settings.\n2. Ensure out-of-stock products are accurately reflected on your storefront theme without displaying contradictory availability.",
+
+  PAYMENT_METHODS_NOT_VISIBLE:
+    "1. In Shopify Admin, go to Online Store > Themes > Customize.\n2. In the theme sidebar, select the 'Footer' section.\n3. Check the setting 'Show payment icons' and click Save so accepted payment badges (Visa, Mastercard, etc.) appear on your storefront footer.",
+
+  SSL_SECURE_CHECKOUT:
+    "1. In Shopify Admin, go to Settings > Domains.\n2. Ensure your primary domain has an active SSL certificate and HTTPS redirection enabled for all storefront visitors.",
+};
+
+export function getRuleFixGuide(ruleCode: string, fallbackGuide?: string): string {
+  return RULE_FIX_GUIDES[ruleCode] || fallbackGuide || "";
+}
+
 interface StorefrontProduct {
   id: number | string;
   title: string;
@@ -47,8 +105,6 @@ export interface MonthlyScanUsage {
   canScan: boolean;
   resetsAt: string;
 }
-
-
 
 export async function getMonthlyScanUsage(shopDomain: string): Promise<MonthlyScanUsage> {
   const now = new Date();
@@ -92,6 +148,9 @@ export async function runStorefrontComplianceScan({
     const elapsedSeconds =
       (Date.now() - new Date(shopRecord.lastScannedAt).getTime()) / 1000;
     if (elapsedSeconds < SCAN_DEBOUNCE_SECONDS) {
+      // console.log(
+      //   `[Scanner] Debounce triggered for ${shopDomain}: last scan was ${elapsedSeconds.toFixed(1)}s ago. Returning latest scan.`
+      // );
       const latestScan = await prisma.scan.findFirst({
         where: { shopId: shopDomain },
         orderBy: { createdAt: "desc" },
@@ -109,7 +168,7 @@ export async function runStorefrontComplianceScan({
             ruleCode: iss.ruleCode,
             title: iss.title,
             description: iss.description,
-            fixGuide: iss.fixGuide,
+            fixGuide: getRuleFixGuide(iss.ruleCode, iss.fixGuide),
           })),
         };
       }
@@ -194,6 +253,10 @@ export async function runStorefrontComplianceScan({
     }
 
     try {
+      console.log(
+        `[Storefront Auth] STOREFRONT_PASSWORD detected in .env. Authenticating against ${targetUrl}/password...`
+      );
+
       // 1. Fetch password page to retrieve CSRF token and initial cookies
       const passPageRes = await fetch(`${targetUrl}/password`, {
         headers: baseHeaders,
@@ -255,6 +318,9 @@ export async function runStorefrontComplianceScan({
         .join("; ");
 
       if (finalCookieHeader) {
+        console.log(
+          `[Storefront Auth] Successfully acquired storefront session cookie. Unlocking password-protected store for audit.`
+        );
         return {
           ...baseHeaders,
           Cookie: finalCookieHeader,
@@ -291,6 +357,13 @@ export async function runStorefrontComplianceScan({
   if (homeRes.status === "fulfilled" && homeRes.value.ok) {
     try {
       homepageHtml = await homeRes.value.text();
+      console.log(
+        `\n============================================================\n` +
+        `[FETCHED HOMEPAGE HTML] URL: ${storeUrl} (${homepageHtml.length} characters)\n` +
+        `============================================================`
+      );
+      console.log(homepageHtml);
+      console.log(`==================== [END HOMEPAGE HTML] ====================\n`);
     } catch (e) {
       console.error("Failed to read homepage HTML text:", e);
     }
@@ -310,9 +383,18 @@ export async function runStorefrontComplianceScan({
   if (contactRes.status === "fulfilled" && contactRes.value.ok) {
     try {
       contactPageHtml = await contactRes.value.text();
+      console.log(
+        `\n============================================================\n` +
+        `[FETCHED CONTACT PAGE HTML] URL: ${storeUrl}/pages/contact (${contactPageHtml.length} characters)\n` +
+        `============================================================`
+      );
+      console.log(contactPageHtml);
+      console.log(`==================== [END CONTACT PAGE HTML] ====================\n`);
     } catch (e) {
       console.error("Failed to read contact page HTML text:", e);
     }
+  } else {
+    console.log(`[Storefront Fetch] Contact page not found or non-200 at ${storeUrl}/pages/contact`);
   }
 
   const $home = cheerio.load(homepageHtml);
@@ -330,6 +412,7 @@ export async function runStorefrontComplianceScan({
     try {
       const res = await fetch(url, { headers: storefrontHeaders });
       if (!res.ok) {
+        console.log(`[Policy Fetch] ${url} returned HTTP ${res.status}`);
         return { exists: false, html: "", text: "" };
       }
       const html = await res.text();
@@ -390,12 +473,15 @@ export async function runStorefrontComplianceScan({
 
     // ── Stage 1: native /policies/<slug> ──────────────────────────────────
     const nativeUrl = `${storeUrl}/policies/${slug}`;
+    console.log(`[Policy Fetch | Stage 1] Trying native route: ${nativeUrl}`);
     const nativeResult = await fetchUrl(nativeUrl);
     if (nativeResult.exists) {
+      console.log(`[Policy Fetch | Stage 1] FOUND at ${nativeUrl}`);
       return nativeResult;
     }
 
     // ── Stage 2: footer / homepage link discovery ─────────────────────────
+    console.log(`[Policy Fetch | Stage 2] Scanning homepage links for keywords: ${keywords.join(", ")}`);
     const discoveredUrls = new Set<string>();
 
     $home("a").each((_, el) => {
@@ -417,8 +503,10 @@ export async function runStorefrontComplianceScan({
     });
 
     for (const url of discoveredUrls) {
+      console.log(`[Policy Fetch | Stage 2] Probing discovered link: ${url}`);
       const result = await fetchUrl(url);
       if (result.exists) {
+        console.log(`[Policy Fetch | Stage 2] FOUND at ${url}`);
         return result;
       }
     }
@@ -426,12 +514,15 @@ export async function runStorefrontComplianceScan({
     // ── Stage 3: common /pages/* slug probing ─────────────────────────────
     for (const fallback of fallbackSlugs) {
       const url = `${storeUrl}/pages/${fallback}`;
+      console.log(`[Policy Fetch | Stage 3] Probing fallback slug: ${url}`);
       const result = await fetchUrl(url);
       if (result.exists) {
+        console.log(`[Policy Fetch | Stage 3] FOUND at ${url}`);
         return result;
       }
     }
 
+    console.log(`[Policy Fetch] Policy "${slug}" not found on any route.`);
     return { exists: false, html: "", text: "" };
   }
 
@@ -475,25 +566,23 @@ export async function runStorefrontComplianceScan({
   const addressCandidateText = `${footerAddressText}\n${contactAddressText}`.trim();
 
   // =============================================================
-  // AI PRE-CHECKS (Sequential / In Series) — Results used in checks 2, 9, 15
+  // AI PRE-CHECKS (Parallel) — Results used in checks 2, 9, 15
   // =============================================================
-  // Check 2: Policy quality (only evaluated if refund policy exists)
-  const aiPolicyResult = refundData.exists
-    ? await checkPolicyQuality(refundData.text)
-    : { pass: false, reason: "Refund policy not found", missingElements: [] };
-
-  // Check 9: Physical address
-  const aiAddressResult = await checkPhysicalAddress(
-    addressCandidateText || `${homepageHtml} ${contactPageHtml}`
-  );
-
-  // Check 15: Product claims
-  const aiClaimsResult = await checkProductClaims(
-    products.map((p: { title: string; descriptionHtml: string }) => ({
-      title: p.title,
-      description: p.descriptionHtml || "",
-    }))
-  );
+  console.log("[Scanner] Running AI pre-checks in parallel (checks 2, 9, 15)...");
+  const [aiPolicyResult, aiAddressResult, aiClaimsResult] = await Promise.all([
+    // Check 2: Policy quality
+    checkPolicyQuality(refundData.exists ? refundData.text : ""),
+    // Check 9: Physical address
+    checkPhysicalAddress(addressCandidateText || `${homepageHtml} ${contactPageHtml}`),
+    // Check 15: Product claims
+    checkProductClaims(
+      products.map((p: { title: string; descriptionHtml: string }) => ({
+        title: p.title,
+        description: p.descriptionHtml || "",
+      }))
+    ),
+  ]);
+  console.log("[Scanner] AI pre-checks complete.");
 
   // =============================================================
   // CATEGORY 1: POLICY PAGES (6 Checks)
@@ -510,8 +599,7 @@ export async function runStorefrontComplianceScan({
       title: "Missing Refund/Return Policy page",
       description:
         "No active refund policy page was found at /policies/refund-policy. Having a clear return policy is mandatory for merchant compliance.",
-      fixGuide:
-        "In Shopify Admin, go to Settings > Policies. Draft and publish your Refund Policy.",
+      fixGuide: RULE_FIX_GUIDES.REFUND_POLICY_EXISTS,
     });
   }
 
@@ -527,8 +615,7 @@ export async function runStorefrontComplianceScan({
         ruleCode: "REFUND_POLICY_DISCLOSURE_INCOMPLETE",
         title: "Refund policy missing required disclosure language",
         description: `AI analysis: ${aiPolicyResult.reason}${aiPolicyResult.missingElements.length > 0 ? ` Missing: ${aiPolicyResult.missingElements.join(", ")}.` : ""}`,
-        fixGuide:
-          "Update your Refund Policy in Settings > Policies to explicitly state the return timeframe (e.g. '30 days') and item condition requirements (e.g. unused, original packaging).",
+        fixGuide: RULE_FIX_GUIDES.REFUND_POLICY_DISCLOSURE_INCOMPLETE,
       });
     }
   } else {
@@ -539,8 +626,7 @@ export async function runStorefrontComplianceScan({
       title: "Refund policy disclosures unverified",
       description:
         "Unable to evaluate disclosure language because the refund policy page does not exist.",
-      fixGuide:
-        "Create and publish your Refund Policy with clear return timeframes and conditions.",
+      fixGuide: RULE_FIX_GUIDES.REFUND_POLICY_DISCLOSURE_INCOMPLETE,
     });
   }
 
@@ -556,8 +642,7 @@ export async function runStorefrontComplianceScan({
       title: "Missing Shipping Policy page",
       description:
         "No shipping policy found at /policies/shipping-policy. Clear transit and handling disclosures prevent merchant center suspensions.",
-      fixGuide:
-        "In Shopify Admin, go to Settings > Policies, draft your Shipping Policy, and click Save.",
+      fixGuide: RULE_FIX_GUIDES.SHIPPING_POLICY_EXISTS,
     });
   }
 
@@ -572,8 +657,7 @@ export async function runStorefrontComplianceScan({
       title: "Missing Privacy Policy page",
       description:
         "A published Privacy Policy is legally required under GDPR, CCPA, and Shopify merchant terms.",
-      fixGuide:
-        "Go to Shopify Admin > Settings > Policies and create your Privacy Policy.",
+      fixGuide: RULE_FIX_GUIDES.PRIVACY_POLICY_EXISTS,
     });
   }
 
@@ -588,8 +672,7 @@ export async function runStorefrontComplianceScan({
       title: "Missing Terms of Service page",
       description:
         "No Terms of Service policy found at /policies/terms-of-service.",
-      fixGuide:
-        "Go to Shopify Admin > Settings > Policies, create your Terms of Service, and click Save.",
+      fixGuide: RULE_FIX_GUIDES.TERMS_POLICY_EXISTS,
     });
   }
 
@@ -605,13 +688,13 @@ export async function runStorefrontComplianceScan({
     footerSections.first().html() ||
     "No footer element found";
 
-  // console.log(
-  //   `\n============================================================\n` +
-  //   `[EXTRACTED FOOTER HTML FOR POLICY & PAYMENT CHECKS]\n` +
-  //   `============================================================\n` +
-  //   realFooterHtml +
-  //   `\n==================== [END EXTRACTED FOOTER HTML] ====================\n`
-  // );
+  console.log(
+    `\n============================================================\n` +
+    `[EXTRACTED FOOTER HTML FOR POLICY & PAYMENT CHECKS]\n` +
+    `============================================================\n` +
+    realFooterHtml +
+    `\n==================== [END EXTRACTED FOOTER HTML] ====================\n`
+  );
 
   const footerHrefsList: string[] = [];
   footerSections.find("a").each((_, el) => {
@@ -659,8 +742,7 @@ export async function runStorefrontComplianceScan({
       title: "Policy pages not linked in storefront footer",
       description:
         "Your policies exist, but they are not linked in the storefront footer menu. Ad platforms and payment gateways flag stores where policies are orphaned or hidden.",
-      fixGuide:
-        "Go to Online Store > Navigation > Footer menu. Add menu items linking to your published Policies.",
+      fixGuide: RULE_FIX_GUIDES.POLICIES_NOT_IN_FOOTER,
     });
   }
 
@@ -688,8 +770,7 @@ export async function runStorefrontComplianceScan({
       title: "Phone number not found on storefront",
       description:
         "No customer support phone number or clickable tel: link was found in your footer or Contact page.",
-      fixGuide:
-        "Add a visible support phone number to your footer or Contact page (<a href='tel:+1...'>Call Us</a>).",
+      fixGuide: RULE_FIX_GUIDES.PHONE_NUMBER_VISIBLE,
     });
   }
 
@@ -715,24 +796,12 @@ export async function runStorefrontComplianceScan({
       title: "No customer support email or contact form found",
       description:
         "Shoppers cannot find a clear way to contact your business. A visible email or contact form is mandatory for merchant verification.",
-      fixGuide:
-        "Add your customer support email address or embed a contact form on your storefront.",
+      fixGuide: RULE_FIX_GUIDES.EMAIL_OR_FORM_VISIBLE,
     });
   }
 
   // Check 9: Physical business address present
   // ── Now powered by GPT-4o-mini NER (falls back to keyword check if no API key) ──
-  // try {
-  //   const contactFilePath = path.resolve(process.cwd(), "contact-page.html");
-  //   await fs.writeFile(
-  //     contactFilePath,
-  //     contactPageHtml || `<!-- Contact page at ${storeUrl}/pages/contact returned empty content -->`,
-  //     "utf-8"
-  //   );
-  // } catch (err) {
-  //   console.error("Failed to save contact-page.html:", err);
-  // }
-
   if (aiAddressResult.pass) {
     passedChecks++;
   } else {
@@ -742,8 +811,7 @@ export async function runStorefrontComplianceScan({
       ruleCode: "PHYSICAL_ADDRESS_VISIBLE",
       title: "Physical business address not displayed",
       description: `AI analysis: ${aiAddressResult.reason}`,
-      fixGuide:
-        "Add your registered business address to your footer or Contact Us page.",
+      fixGuide: RULE_FIX_GUIDES.PHYSICAL_ADDRESS_VISIBLE,
     });
   }
 
@@ -776,8 +844,7 @@ export async function runStorefrontComplianceScan({
       ruleCode: "BUSINESS_NAME_MISMATCH",
       title: "Storefront branding does not match Shopify store name",
       description: `Your configured store name is "${shopData?.name}", but this name was not clearly found in your homepage title, header, or footer copyright.`,
-      fixGuide:
-        "Align your storefront title and footer copyright with your store name in Settings > General.",
+      fixGuide: RULE_FIX_GUIDES.BUSINESS_NAME_MISMATCH,
     });
   }
 
@@ -802,8 +869,7 @@ export async function runStorefrontComplianceScan({
       title: "Storefront address requires manual Merchant Center verification",
       description:
         "Could not automatically verify that the physical address displayed on your storefront exactly matches your registered Merchant Center / Shopify billing address.",
-      fixGuide:
-        "Manually confirm that your displayed storefront address matches your Google Merchant Center business registration.",
+      fixGuide: RULE_FIX_GUIDES.MERCHANT_CENTER_ADDRESS_VERIFY,
     });
   }
 
@@ -833,8 +899,7 @@ export async function runStorefrontComplianceScan({
       title: `${missingBarcodes} product variants missing Barcodes/GTINs`,
       description:
         "Products listed on Google Shopping and Meta feeds require valid barcodes (GTIN, UPC, EAN, or ISBN).",
-      fixGuide:
-        "Open Products in Shopify Admin, edit your variants, and provide valid Barcodes (GTIN).",
+      fixGuide: RULE_FIX_GUIDES.MISSING_GTIN_BARCODE,
     });
   }
 
@@ -867,8 +932,7 @@ export async function runStorefrontComplianceScan({
       title: `${priceMismatchCount} products have price discrepancies between feed and live store`,
       description:
         "A price mismatch was detected between live storefront JSON and catalog data. This is a primary cause for Google Merchant Center suspensions.",
-      fixGuide:
-        "Verify your currency conversion apps and make sure prices shown on product pages match your catalog prices.",
+      fixGuide: RULE_FIX_GUIDES.PRICE_MISMATCH_FEED,
     });
   }
 
@@ -893,8 +957,7 @@ export async function runStorefrontComplianceScan({
       title: `${missingImageCount} active products missing images`,
       description:
         "Found active products without images or using placeholder placeholders. Ad networks reject listings without images.",
-      fixGuide:
-        "Upload high-quality product images to all active products in Shopify Admin.",
+      fixGuide: RULE_FIX_GUIDES.MISSING_PRODUCT_IMAGES,
     });
   }
 
@@ -913,8 +976,7 @@ export async function runStorefrontComplianceScan({
       ruleCode: "RISKY_PROMOTIONAL_LANGUAGE",
       title: `${aiClaimsResult.flagged.length} products contain unverifiable promotional claims`,
       description: `AI analysis: ${aiClaimsResult.reason}${flaggedSummary ? ` Flagged: ${flaggedSummary}.` : ""}`,
-      fixGuide:
-        "Edit affected product descriptions and remove unverifiable guarantees, absolute medical claims, or competitor disparagement.",
+      fixGuide: RULE_FIX_GUIDES.RISKY_PROMOTIONAL_LANGUAGE,
     });
   }
 
@@ -945,8 +1007,7 @@ export async function runStorefrontComplianceScan({
       title: "Product availability status discrepancy detected",
       description:
         "Storefront product availability does not consistently match catalog inventory records.",
-      fixGuide:
-        "Verify your inventory tracking settings and ensure out-of-stock items are accurately marked in your theme.",
+      fixGuide: RULE_FIX_GUIDES.INVENTORY_AVAILABILITY_MISMATCH,
     });
   }
 
@@ -973,8 +1034,7 @@ export async function runStorefrontComplianceScan({
       title: "Payment methods not visibly displayed on storefront",
       description:
         "Accepted payment methods (Visa, Mastercard, PayPal) should be clearly displayed in the footer before checkout to comply with transparency rules.",
-      fixGuide:
-        "In Online Store > Themes > Customize, navigate to the Footer section and toggle 'Show payment icons' on.",
+      fixGuide: RULE_FIX_GUIDES.PAYMENT_METHODS_NOT_VISIBLE,
     });
   }
 
@@ -993,8 +1053,7 @@ export async function runStorefrontComplianceScan({
       title: "Active SSL secure connection not verified",
       description:
         "Your storefront must enforce HTTPS encryption across all pages and checkout.",
-      fixGuide:
-        "In Online Store > Domains, ensure SSL status is active and traffic is routed via HTTPS.",
+      fixGuide: RULE_FIX_GUIDES.SSL_SECURE_CHECKOUT,
     });
   }
 
@@ -1050,6 +1109,10 @@ export async function runStorefrontComplianceScan({
       },
     }),
   ]);
+
+  console.log(
+    `[Scanner] Completed 18 checks for ${shopDomain}. Score: ${score}/100. Passed: ${passedChecks}/18. Issues: ${issues.length}.`
+  );
 
   return { score, passedChecks, totalChecks, categoryScores, issues };
 }

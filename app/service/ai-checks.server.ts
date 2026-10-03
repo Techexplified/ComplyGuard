@@ -14,6 +14,7 @@
 
 import { ChatOpenAI } from "@langchain/openai";
 import path from "node:path";
+import os from "node:os";
 import { z } from "zod";
 import fs from "node:fs/promises";
 // ─────────────────────────────────────────────────────────────────
@@ -101,7 +102,6 @@ export function cleanPageText(raw: string): string {
   text = text.replace(/\bfor\s*\([^)]*\)\s*\{?/g, " ");
   text = text.replace(/\bif\s*\([^)]*\)\s*\{?/g, " ");
   text = text.replace(/\belse\s*\{?/g, " ");
-  text = text.replace(/\breturn\b[^\n.;]*[.;]?/g, " ");
   text = text.replace(/\bnew\s+URL\s*\([^)]*\)\s*;?/g, " ");
   text = text.replace(/\bnew\s+[A-Z]\w*\s*\([^)]*\)\s*;?/g, " ");
   text = text.replace(/\bhydrate\s*\([^)]*\)\s*;?/g, " ");
@@ -266,16 +266,39 @@ const PolicyQualitySchema = z.object({
 export type PolicyQualityResult = z.infer<typeof PolicyQualitySchema>;
 
 // ---------------------------------------------------------------------------
+// cleanPolicyText
+// ---------------------------------------------------------------------------
+// Safely cleans HTML tags, entities, and whitespace from legal policy text
+// WITHOUT stripping English words like 'return', 'condition', etc.
+// ---------------------------------------------------------------------------
+export function cleanPolicyText(raw: string): string {
+  if (!raw) return "";
+  let text = raw.replace(/\r\n?/g, "\n");
+  text = text.replace(/<script[\s\S]*?<\/script>/gi, " ");
+  text = text.replace(/<style[\s\S]*?<\/style>/gi, " ");
+  text = text.replace(/<!--[\s\S]*?-->/g, " ");
+  text = text.replace(/<[^>]+>/g, " ");
+  text = text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, " ");
+  text = text.replace(/[ \t]+/g, " ").replace(/\n{2,}/g, "\n\n").trim();
+  return text;
+}
+
+// ---------------------------------------------------------------------------
 // extractRelevantPolicyText
 // ---------------------------------------------------------------------------
 // Extracts compliance-critical sections from refund policies (timeframes,
 // item conditions, fees, shipping, exceptions) while dropping boilerplate.
-// Ensures high-signal text fits safely into compact LLM context windows.
 // ---------------------------------------------------------------------------
-export function extractRelevantPolicyText(raw: string, maxChars = 2000): string {
+export function extractRelevantPolicyText(raw: string, maxChars = 4000): string {
   if (!raw) return "";
 
-  const cleaned = cleanPageText(raw).trim();
+  const cleaned = cleanPolicyText(raw);
   if (cleaned.length <= maxChars) {
     return cleaned;
   }
@@ -364,19 +387,34 @@ export async function checkPolicyQuality(policyText: string): Promise<PolicyQual
   const fallbackCheck = () => {
     const text = policyText.toLowerCase();
     const hasTimeframe =
-      /\b(\d{1,3}\s*(day|days|business days|month|weeks))\b/i.test(text) ||
-      text.includes("return window");
+      /\b(\d{1,3}[\s-]*(day|days|business days|calendar days|working days|month|months|week|weeks))\b/i.test(text) ||
+      text.includes("return window") ||
+      text.includes("return period") ||
+      text.includes("timeframe") ||
+      text.includes("within 30") ||
+      text.includes("within 14");
     const hasConditions =
       text.includes("condition") ||
       text.includes("unused") ||
-      text.includes("original packaging");
-    const pass = hasTimeframe && hasConditions && text.split(/\s+/).length >= 50;
+      text.includes("unworn") ||
+      text.includes("unopened") ||
+      text.includes("original packaging") ||
+      text.includes("packaging") ||
+      text.includes("tag") ||
+      text.includes("proof of purchase") ||
+      text.includes("receipt");
+    const wordCount = text.replace(/<[^>]+>/g, " ").split(/\s+/).filter(Boolean).length;
+    const pass = hasTimeframe && hasConditions && wordCount >= 30;
+    const missing: string[] = [];
+    if (!hasTimeframe) missing.push("return timeframe");
+    if (!hasConditions) missing.push("item conditions");
+    if (wordCount < 30) missing.push("substantive text (at least 30 words)");
     return {
       pass,
       reason: pass
         ? "Policy contains required return timeframe and condition disclosures"
-        : "Policy missing return timeframe or product condition requirements",
-      missingElements: pass ? [] : ["return timeframe", "item conditions"],
+        : `Policy missing ${missing.join(" or ")}`,
+      missingElements: pass ? [] : (missing.length > 0 ? missing : ["return timeframe", "item conditions"]),
     };
   };
   
@@ -391,7 +429,11 @@ export async function checkPolicyQuality(policyText: string): Promise<PolicyQual
     const structured = model.withStructuredOutput(PolicyQualitySchema);
     console.log("[AI-Check 2] Evaluating refund policy quality via GPT-4o-mini");
 
-    const focusedPolicyText = extractRelevantPolicyText(policyText, 2500);
+    const focusedPolicyText = extractRelevantPolicyText(policyText, 4000);
+
+    // 🔍 DEBUG: write policy text to file for inspection
+   
+    console.log("[AI-Check 2] Focused policy text (first 500 chars):", focusedPolicyText.slice(0, 500));
 
     const result = await withTimeout(
       structured.invoke([
@@ -436,17 +478,13 @@ export type AddressDetectionResult = z.infer<typeof AddressDetectionSchema>;
 
 export async function checkPhysicalAddress(pageText: string): Promise<AddressDetectionResult> {
 
-  let newText:string=preparePageText(pageText)
-//   try {
-//   const contactFilePath = path.resolve(process.cwd(), "contact-page.txt");
-//   await fs.writeFile(
-//     contactFilePath,
-//     newText,
-//     "utf-8"
-//   );
-// } catch (err) {
-//   console.error("Failed to save contact-page.html:", err);
-// }
+  let newText: string = preparePageText(pageText);
+  try {
+    const contactFilePath = path.join(os.tmpdir(), "complyguard-contact-page.txt");
+    await fs.writeFile(contactFilePath, newText, "utf-8");
+  } catch (err) {
+    console.error("Failed to save contact-page debug file:", err);
+  }
   const fallbackCheck = () => {
     const ADDRESS_TERMS = [
       "street", " st.", "road", " rd.", "avenue", " ave.",
@@ -569,11 +607,6 @@ const fallbackCheck = () => {
           `[${i + 1}] Title: ${p.title}\nDescription: ${p.description.replace(/<[^>]+>/g, " ").slice(0, 200)}`
       )
       .join("\n\n");
-
-      // Check 9: Physical business address present
-
-
-
     const structured = model.withStructuredOutput(ProductClaimsSchema);
     const result = await withTimeout(
       structured.invoke([

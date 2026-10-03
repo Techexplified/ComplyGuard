@@ -4,7 +4,7 @@ import { redirect, useLoaderData, useLocation, Form, Link, useRouteError } from 
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
-import { getMonthlyScanUsage } from "../service/scanner.server";
+import { getMonthlyScanUsage, getRuleFixGuide } from "../service/scanner.server";
 
 // --- Server Loader & Action --------------------------------------------------
 
@@ -40,8 +40,44 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     return redirect(`/app/onboarding${url.search}`);
   }
 
+  let isPasswordProtected = false;
+  try {
+    const res = await fetch(`https://${shopDomain}`, {
+      headers: { "User-Agent": "ComplyGuard-Audit/1.0" },
+      signal: AbortSignal.timeout(2500),
+      redirect: "follow",
+    });
+    if (res.url.includes("/password")) {
+      isPasswordProtected = true;
+    } else {
+      const html = await res.text();
+      isPasswordProtected =
+        html.includes('name="password"') ||
+        html.includes('/password') ||
+        html.toLowerCase().includes("opening soon") ||
+        html.toLowerCase().includes("password-page") ||
+        html.toLowerCase().includes("storefront-password");
+    }
+  } catch {
+    isPasswordProtected = shopRecord.issues.some(
+      (iss) =>
+        iss.title.toLowerCase().includes("password") ||
+        iss.description.toLowerCase().includes("password")
+    );
+  }
+
+  if (shopRecord?.issues) {
+    shopRecord = {
+      ...shopRecord,
+      issues: shopRecord.issues.map((iss) => ({
+        ...iss,
+        fixGuide: getRuleFixGuide(iss.ruleCode, iss.fixGuide),
+      })),
+    };
+  }
+
   const scanUsage = await getMonthlyScanUsage(shopDomain);
-  return { shop: shopRecord, scanUsage };
+  return { shop: shopRecord, scanUsage, isPasswordProtected, shopDomain };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -527,8 +563,9 @@ const css = `
     gap: 8px;
   }
   .cg-expanded-guide {
-    line-height: 1.5;
+    line-height: 1.6;
     color: var(--ink-soft);
+    white-space: pre-line;
   }
 
   .cg-passed-accordion-btn {
@@ -869,15 +906,139 @@ const css = `
     color: #a39c95 !important;
     cursor: not-allowed !important;
   }
+
+  .cg-locked-banner {
+    background: #fff8f1;
+    border: 1px solid #fed7aa;
+    border-radius: 14px;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    box-shadow: 0 2px 8px -2px rgba(234, 88, 12, 0.08);
+    animation: cgFadeIn 0.3s ease;
+  }
+  @keyframes cgFadeIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .cg-locked-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex: 1;
+  }
+  .cg-locked-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 10px;
+    background: #ffedd5;
+    border: 1px solid #fdba74;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: #ea580c;
+  }
+  .cg-locked-text {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .cg-locked-title {
+    font-family: var(--disp);
+    font-size: 14.5px;
+    font-weight: 700;
+    color: #9a3412;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .cg-locked-tag {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    background: #ffedd5;
+    color: #c2410c;
+    border: 1px solid #fdba74;
+    padding: 2px 7px;
+    border-radius: 5px;
+  }
+  .cg-locked-desc {
+    font-size: 12.5px;
+    color: #7c2d12;
+    line-height: 1.45;
+  }
+  .cg-locked-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .cg-locked-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #ea580c;
+    color: #ffffff;
+    font-family: var(--body);
+    font-size: 12.5px;
+    font-weight: 600;
+    padding: 8px 16px;
+    border-radius: 8px;
+    text-decoration: none;
+    transition: all 0.15s ease;
+    box-shadow: 0 1px 3px rgba(234, 88, 12, 0.25);
+    white-space: nowrap;
+  }
+  .cg-locked-btn:hover {
+    background: #c2410c;
+    color: #ffffff;
+    box-shadow: 0 2px 6px rgba(194, 65, 12, 0.35);
+  }
+  .cg-locked-close {
+    background: transparent;
+    border: none;
+    color: #9a3412;
+    font-size: 15px;
+    padding: 6px 8px;
+    cursor: pointer;
+    border-radius: 6px;
+    line-height: 1;
+    transition: all 0.15s ease;
+  }
+  .cg-locked-close:hover {
+    background: #fed7aa;
+    color: #7c2d12;
+  }
+  @media (max-width: 768px) {
+    .cg-locked-banner {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 12px;
+    }
+    .cg-locked-actions {
+      width: 100%;
+      justify-content: space-between;
+    }
+  }
 `;
 
 export default function DashboardPage() {
-  const { shop, scanUsage } = useLoaderData<typeof loader>();
+  const { shop, scanUsage, isPasswordProtected, shopDomain } = useLoaderData<typeof loader>();
   const location = useLocation();
   const [activeTab, setActiveTab] = useState<"dashboard" | "history">("dashboard");
   const [showPassed, setShowPassed] = useState(false);
   const [expandedIssueId, setExpandedIssueId] = useState<string | null>(null);
   const [expandedScanId, setExpandedScanId] = useState<string | null>(null);
+  const [passwordBannerDismissed, setPasswordBannerDismissed] = useState(false);
+
+  const cleanDomain = (shopDomain || "").replace(".myshopify.com", "");
+  const preferencesUrl = `https://admin.shopify.com/store/${cleanDomain}/online_store/preferences`;
 
   const scans = shop.scans || [];
   const allIssues = shop.issues || [];
@@ -1146,6 +1307,47 @@ export default function DashboardPage() {
             /* -------------------- DASHBOARD MAIN VIEW -------------------- */
             <>
               <div className="cg-content">
+                {/* Storefront Password Protection Alert Banner */}
+                {isPasswordProtected && !passwordBannerDismissed && (
+                  <div className="cg-locked-banner">
+                    <div className="cg-locked-left">
+                      <div className="cg-locked-icon">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                          <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                        </svg>
+                      </div>
+                      <div className="cg-locked-text">
+                        <div className="cg-locked-title">
+                          Storefront is Password Protected
+                          <span className="cg-locked-tag">Action Required</span>
+                        </div>
+                        <div className="cg-locked-desc">
+                          Your online store is currently locked behind a password. To scan your public storefront and prevent ad account suspensions, you need to remove password protection. If you don't remove the password, some storefront checks might not be verified properly.
+                        </div>
+                      </div>
+                    </div>
+                    <div className="cg-locked-actions">
+                      <a
+                        href={preferencesUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="cg-locked-btn"
+                      >
+                        Remove Password in Shopify →
+                      </a>
+                      {/* <button
+                        type="button"
+                        className="cg-locked-close"
+                        onClick={() => setPasswordBannerDismissed(true)}
+                        title="Dismiss alert"
+                      >
+                        ✕
+                      </button> */}
+                    </div>
+                  </div>
+                )}
+
                 {/* Hero / Score Section */}
                 <div className="cg-hero">
                   <div className="cg-hero-left">
