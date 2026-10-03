@@ -13,8 +13,8 @@
  */
 
 import { ChatOpenAI } from "@langchain/openai";
-import path from "node:path";
-import os from "node:os";
+// import path from "node:path";
+// import os from "node:os";
 import { z } from "zod";
 import fs from "node:fs/promises";
 // ─────────────────────────────────────────────────────────────────
@@ -479,12 +479,12 @@ export type AddressDetectionResult = z.infer<typeof AddressDetectionSchema>;
 export async function checkPhysicalAddress(pageText: string): Promise<AddressDetectionResult> {
 
   let newText: string = preparePageText(pageText);
-  try {
-    const contactFilePath = path.join(os.tmpdir(), "complyguard-contact-page.txt");
-    await fs.writeFile(contactFilePath, newText, "utf-8");
-  } catch (err) {
-    console.error("Failed to save contact-page debug file:", err);
-  }
+  // try {
+  //   const contactFilePath = path.join(os.tmpdir(), "complyguard-contact-page.txt");
+  //   await fs.writeFile(contactFilePath, newText, "utf-8");
+  // } catch (err) {
+  //   console.error("Failed to save contact-page debug file:", err);
+  // }
   const fallbackCheck = () => {
     const ADDRESS_TERMS = [
       "street", " st.", "road", " rd.", "avenue", " ave.",
