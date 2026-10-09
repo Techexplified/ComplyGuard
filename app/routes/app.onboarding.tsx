@@ -17,8 +17,60 @@ import { OnboardingStep1 } from "../components/OnboardingStep1";
 import { OnboardingStep2 } from "../components/OnboardingStep2";
 import { OnboardingStep3 } from "../components/OnboardingStep3";
 
+async function checkIsStorefrontPasswordProtected(
+  shopDomain: string,
+  admin?: { graphql: (query: string, options?: Record<string, unknown>) => Promise<Response> }
+): Promise<boolean> {
+  // 1. Try GraphQL if admin client is provided
+  if (admin) {
+    try {
+      const gqlRes = await admin.graphql(`
+        query CheckPasswordProtection {
+          shop {
+            passwordProtection {
+              enabled
+            }
+          }
+        }
+      `);
+      if (gqlRes.ok) {
+        const json = await gqlRes.json();
+        if (typeof json?.data?.shop?.passwordProtection?.enabled === "boolean") {
+          return json.data.shop.passwordProtection.enabled;
+        }
+      }
+    } catch {
+      // Fall through to HTTP check
+    }
+  }
+
+  // 2. Direct storefront HTTP check
+  try {
+    const res = await fetch(`https://${shopDomain}`, {
+      headers: { "User-Agent": "ComplyGuard-Audit/1.0" },
+      signal: AbortSignal.timeout(3500),
+      redirect: "follow",
+    });
+    if (res.url.includes("/password")) {
+      return true;
+    }
+    const html = await res.text();
+    return (
+      html.includes('name="password"') ||
+      html.includes('/password') ||
+      html.toLowerCase().includes("opening soon") ||
+      html.toLowerCase().includes("password-page") ||
+      html.toLowerCase().includes("template-password") ||
+      html.toLowerCase().includes("storefront-password")
+    );
+  } catch (err) {
+    console.warn(`[PasswordCheck] Error checking https://${shopDomain}:`, err);
+    return false;
+  }
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shopDomain = session.shop;
 
   const shopRecord = await prisma.shop.findUnique({
@@ -32,12 +84,31 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     return redirect(`/app${url.search}`);
   }
 
-  return { shop: shopDomain };
+  const isPasswordProtected = await checkIsStorefrontPasswordProtected(shopDomain, admin);
+
+  return { shop: shopDomain, isPasswordProtected };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const shopDomain = session.shop;
+  const formData = await request.formData();
+  const intent = formData.get("intent");
+
+  if (intent === "check_lock") {
+    const isPasswordProtected = await checkIsStorefrontPasswordProtected(shopDomain, admin);
+    return { isPasswordProtected, checkedAt: Date.now() };
+  }
+
+  // Completing onboarding / initiating first scan:
+  // Server-side validation: block if storefront is password-protected
+  const isPasswordProtected = await checkIsStorefrontPasswordProtected(shopDomain, admin);
+  if (isPasswordProtected) {
+    return {
+      error: "Your storefront is currently locked behind a password. Please remove password protection in Online Store > Preferences to proceed.",
+      isPasswordProtected: true,
+    };
+  }
 
   await prisma.shop.upsert({
     where: { shopDomain },
@@ -58,11 +129,33 @@ export default function OnboardingPage() {
   const data = useLoaderData<typeof loader>();
   const shop = data?.shop ?? "";
   const [currentStep, setCurrentStep] = useState(1);
-  const fetcher = useFetcher();
-  const isSubmitting = ["loading", "submitting"].includes(fetcher.state);
+  const finishFetcher = useFetcher();
+  const lockFetcher = useFetcher();
+
+  // Prefer lockFetcher response if available, then finishFetcher error state, then loader data
+  const isPasswordProtected =
+    lockFetcher.data?.isPasswordProtected !== undefined
+      ? Boolean(lockFetcher.data.isPasswordProtected)
+      : finishFetcher.data?.isPasswordProtected !== undefined
+      ? Boolean(finishFetcher.data.isPasswordProtected)
+      : Boolean(data?.isPasswordProtected);
+
+  const isCheckingLock = ["loading", "submitting"].includes(lockFetcher.state);
+  const isSubmitting = ["loading", "submitting"].includes(finishFetcher.state);
+  const errorMessage = finishFetcher.data?.error || null;
 
   const handleFinishOnboarding = () => {
-    fetcher.submit({}, { method: "POST" });
+    finishFetcher.submit({ intent: "finish_onboarding" }, { method: "POST" });
+  };
+
+  const handleRecheckLock = () => {
+    lockFetcher.submit({ intent: "check_lock" }, { method: "POST" });
+  };
+
+  const handleGoToStep3 = () => {
+    setCurrentStep(3);
+    // Refresh storefront lock status when moving to step 3
+    lockFetcher.submit({ intent: "check_lock" }, { method: "POST" });
   };
 
   return (
@@ -153,7 +246,7 @@ export default function OnboardingPage() {
           <OnboardingStep2
             shopDomain={shop}
             onBack={() => setCurrentStep(1)}
-            onContinue={() => setCurrentStep(3)}
+            onContinue={handleGoToStep3}
           />
         )}
 
@@ -163,6 +256,11 @@ export default function OnboardingPage() {
             onBack={() => setCurrentStep(2)}
             onScan={handleFinishOnboarding}
             isScanning={isSubmitting}
+            shopDomain={shop}
+            isPasswordProtected={isPasswordProtected}
+            isCheckingLock={isCheckingLock}
+            onRecheckLock={handleRecheckLock}
+            errorMessage={errorMessage}
           />
         )}
       </div>
