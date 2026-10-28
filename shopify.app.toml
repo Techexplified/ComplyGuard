@@ -2,7 +2,7 @@
 
 client_id = "3a63de05aa19f515923602ee95bb85da"
 name = "ComplyGuard"
-application_url = "https://example.com"
+application_url = "https://comply-guard.vercel.app"
 embedded = true
 
 [access_scopes]
