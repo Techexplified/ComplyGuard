@@ -4,6 +4,8 @@ interface OnboardingStep3Props {
   isScanning?: boolean;
   shopDomain?: string;
   isPasswordProtected?: boolean;
+  isLocked?: boolean;
+  hasEnvPassword?: boolean;
   isCheckingLock?: boolean;
   onRecheckLock?: () => void;
   errorMessage?: string | null;
@@ -41,6 +43,8 @@ export function OnboardingStep3({
   isScanning = false,
   shopDomain = "",
   isPasswordProtected = false,
+  isLocked = false,
+  hasEnvPassword = false,
   isCheckingLock = false,
   onRecheckLock,
   errorMessage = null,
@@ -118,7 +122,67 @@ export function OnboardingStep3({
       )}
 
       {/* Storefront Lock Status Banner */}
-      {isPasswordProtected ? (
+      {isLocked && hasEnvPassword ? (
+        <div className="bg-[#eff6ff] border border-[#bfdbfe] rounded-2xl p-5 sm:p-6 mb-6 shadow-sm">
+          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="flex items-start sm:items-center gap-3.5">
+              <div className="w-10 h-10 rounded-xl bg-[#dbeafe] border border-[#93c5fd] text-[#2563eb] flex items-center justify-center shrink-0">
+                <svg
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2" />
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                </svg>
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-[15px] font-bold text-[#1e40af]">
+                    Storefront password configured in .env
+                  </h3>
+                  <span className="text-[10px] font-bold tracking-wider uppercase px-2 py-0.5 rounded-full bg-[#dbeafe] border border-[#93c5fd] text-[#1d4ed8]">
+                    Ready to enter
+                  </span>
+                </div>
+                <p className="text-xs sm:text-[13px] text-[#1e3a8a] mt-0.5 leading-relaxed max-w-160">
+                  Your storefront is password protected, but ComplyGuard will authenticate using the password in your environment. You can scan and enter the app without unlocking.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2.5 w-full md:w-auto shrink-0">
+              <button
+                type="button"
+                onClick={onRecheckLock}
+                disabled={isCheckingLock}
+                className="flex-1 md:flex-none inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-white border border-blue-200 text-blue-800 hover:bg-blue-50 active:scale-95 transition disabled:opacity-50 cursor-pointer shadow-xs"
+                title="Refresh storefront check"
+              >
+                <svg
+                  className={`w-3.5 h-3.5 ${
+                    isCheckingLock ? "animate-spin text-blue-700" : "text-blue-500"
+                  }`}
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
+                </svg>
+                {isCheckingLock ? "Checking..." : "Re-check status"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : isPasswordProtected ? (
         <div className="bg-[#fff8f1] border border-[#fed7aa] rounded-2xl p-5 sm:p-6 mb-6 shadow-sm">
           <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
             <div className="flex items-start sm:items-center gap-3.5">
@@ -360,7 +424,9 @@ export function OnboardingStep3({
             {isScanning ? "Scanning store..." : "Scan my store"}
           </button>
           <p className="text-xs sm:text-[13px] text-zinc-400 font-mono tracking-tight text-center">
-            You can re-run this scan anytime from your dashboard
+            {isLocked && hasEnvPassword
+              ? "Storefront access enabled via .env password"
+              : "You can re-run this scan anytime from your dashboard"}
           </p>
         </div>
       )}

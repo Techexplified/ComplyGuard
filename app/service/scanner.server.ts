@@ -95,13 +95,12 @@ interface StorefrontProduct {
   }>;
 }
 
-export const MONTHLY_SCAN_LIMIT = 5;
-
+export const MONTHLY_SCAN_LIMIT = 999999; // Unlimited for now
 
 export interface MonthlyScanUsage {
   count: number;
-  limit: number;
-  remaining: number;
+  limit: number | string;
+  remaining: number | string;
   canScan: boolean;
   resetsAt: string;
 }
@@ -117,15 +116,13 @@ export async function getMonthlyScanUsage(shopDomain: string): Promise<MonthlySc
     },
   });
 
-  const remaining = Math.max(0, MONTHLY_SCAN_LIMIT - count);
-  const canScan = count < MONTHLY_SCAN_LIMIT;
   const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1, 0, 0, 0, 0);
 
   return {
     count,
-    limit: MONTHLY_SCAN_LIMIT,
-    remaining,
-    canScan,
+    limit: "Unlimited",
+    remaining: "Unlimited",
+    canScan: true,
     resetsAt: nextMonth.toISOString(),
   };
 }
@@ -176,14 +173,9 @@ export async function runStorefrontComplianceScan({
   }
 
   // -------------------------------------------------------------
-  // 0b. Enforce Monthly Scan Limit (Max 5 scans per calendar month)
+  // 0b. Enforce Monthly Scan Limit (Unlimited for now)
   // -------------------------------------------------------------
-  const usage = await getMonthlyScanUsage(shopDomain);
-  if (!usage.canScan) {
-    throw new Error(
-      `Monthly scan limit reached (${usage.count}/${usage.limit} scans used this month). Your quota will reset on ${new Date(usage.resetsAt).toLocaleDateString()}.`
-    );
-  }
+  // Unlimited scans enabled — no quota restrictions enforced.
 
   const issues: IssueResult[] = [];
   let passedChecks = 0;
@@ -243,7 +235,12 @@ export async function runStorefrontComplianceScan({
   // 2. Fetch Storefront Homepage & Public Data (Parallel)
   // -------------------------------------------------------------
   async function getStorefrontAuthHeaders(targetUrl: string): Promise<Record<string, string>> {
-    const storePassword = process.env.STOREFRONT_PASSWORD?.trim();
+    const storePassword = (
+      process.env.STOREFRONT_PASSWORD ||
+      process.env.SHOPIFY_PASSWORD ||
+      process.env.shopify_password ||
+      process.env.shopify_PAssword
+    )?.trim();
     const baseHeaders: Record<string, string> = {
       "User-Agent": "ComplyGuard-Compliance-Auditor/1.0",
     };

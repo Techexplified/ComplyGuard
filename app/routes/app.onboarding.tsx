@@ -69,6 +69,20 @@ async function checkIsStorefrontPasswordProtected(
   }
 }
 
+function hasEnvStorefrontPassword(): boolean {
+  if (process.env.STOREFRONT_PASSWORD?.trim()) return true;
+  if (process.env.SHOPIFY_PASSWORD?.trim()) return true;
+  if (process.env.shopify_password?.trim()) return true;
+  if (process.env.shopify_PAssword?.trim()) return true;
+
+  for (const [key, val] of Object.entries(process.env)) {
+    if (/^(storefront|shopify)_?password$/i.test(key) && typeof val === "string" && val.trim()) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
   const shopDomain = session.shop;
@@ -84,9 +98,17 @@ export const loader = async ({ request }: LoaderFunctionArgs) => {
     return redirect(`/app${url.search}`);
   }
 
-  const isPasswordProtected = await checkIsStorefrontPasswordProtected(shopDomain, admin);
+  const isLocked = await checkIsStorefrontPasswordProtected(shopDomain, admin);
+  const hasEnvPassword = hasEnvStorefrontPassword();
+  // Only block if storefront is locked AND no storefront password is in .env
+  const isPasswordProtected = isLocked && !hasEnvPassword;
 
-  return { shop: shopDomain, isPasswordProtected };
+  return {
+    shop: shopDomain,
+    isPasswordProtected,
+    isLocked,
+    hasEnvPassword,
+  };
 };
 
 export const action = async ({ request }: ActionFunctionArgs) => {
@@ -95,18 +117,29 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   const formData = await request.formData();
   const intent = formData.get("intent");
 
+  const hasEnvPassword = hasEnvStorefrontPassword();
+
   if (intent === "check_lock") {
-    const isPasswordProtected = await checkIsStorefrontPasswordProtected(shopDomain, admin);
-    return { isPasswordProtected, checkedAt: Date.now() };
+    const isLocked = await checkIsStorefrontPasswordProtected(shopDomain, admin);
+    const isPasswordProtected = isLocked && !hasEnvPassword;
+    return {
+      isPasswordProtected,
+      isLocked,
+      hasEnvPassword,
+      checkedAt: Date.now(),
+    };
   }
 
   // Completing onboarding / initiating first scan:
-  // Server-side validation: block if storefront is password-protected
-  const isPasswordProtected = await checkIsStorefrontPasswordProtected(shopDomain, admin);
+  // Server-side validation: only block if storefront is locked AND no password in .env
+  const isLocked = await checkIsStorefrontPasswordProtected(shopDomain, admin);
+  const isPasswordProtected = isLocked && !hasEnvPassword;
   if (isPasswordProtected) {
     return {
       error: "Your storefront is currently locked behind a password. Please remove password protection in Online Store > Preferences to proceed.",
       isPasswordProtected: true,
+      isLocked: true,
+      hasEnvPassword: false,
     };
   }
 
@@ -139,6 +172,18 @@ export default function OnboardingPage() {
       : finishFetcher.data?.isPasswordProtected !== undefined
       ? Boolean(finishFetcher.data.isPasswordProtected)
       : Boolean(data?.isPasswordProtected);
+
+  const isLocked =
+    lockFetcher.data?.isLocked !== undefined
+      ? Boolean(lockFetcher.data.isLocked)
+      : finishFetcher.data?.isLocked !== undefined
+      ? Boolean(finishFetcher.data.isLocked)
+      : Boolean(data?.isLocked);
+
+  const hasEnvPassword =
+    lockFetcher.data?.hasEnvPassword !== undefined
+      ? Boolean(lockFetcher.data.hasEnvPassword)
+      : Boolean(data?.hasEnvPassword);
 
   const isCheckingLock = ["loading", "submitting"].includes(lockFetcher.state);
   const isSubmitting = ["loading", "submitting"].includes(finishFetcher.state);
@@ -258,6 +303,8 @@ export default function OnboardingPage() {
             isScanning={isSubmitting}
             shopDomain={shop}
             isPasswordProtected={isPasswordProtected}
+            isLocked={isLocked}
+            hasEnvPassword={hasEnvPassword}
             isCheckingLock={isCheckingLock}
             onRecheckLock={handleRecheckLock}
             errorMessage={errorMessage}

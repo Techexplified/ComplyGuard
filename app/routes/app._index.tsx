@@ -1719,31 +1719,17 @@ export default function DashboardPage() {
               {/* Bottom Re-Scan Button with Monthly Quota */}
               <div className="cg-bottom-bar">
                 <div className="cg-quota-info">
-                  <span
+                  {/* <span
                     className="cg-quota-dot"
-                    style={{ background: scanUsage.canScan ? "#10b981" : "#ea580c" }}
-                  />
+                    style={{ background: "#10b981" }}
+                  /> */}
                   <span>
-                    Monthly Scans: <strong className="cg-quota-count">{scanUsage.count} / {scanUsage.limit} used</strong>
-                    {scanUsage.canScan
-                      ? ` (${scanUsage.remaining} remaining)`
-                      : ` · Quota resets ${new Date(scanUsage.resetsAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`}
+                    {/* Monthly Scans: <strong className="cg-quota-count">{scanUsage.count} scans run</strong> (Unlimited) */}
                   </span>
                 </div>
-                {scanUsage.canScan ? (
-                  <Link to={`/app/scanning${location.search}`} className="cg-rescan-btn">
-                    Re - Scan Now
-                  </Link>
-                ) : (
-                  <button
-                    type="button"
-                    disabled
-                    className="cg-rescan-btn cg-rescan-btn-disabled"
-                    title={`Monthly scan limit reached (${scanUsage.limit}/${scanUsage.limit} scans used). Quota resets on ${new Date(scanUsage.resetsAt).toLocaleDateString()}.`}
-                  >
-                    Monthly Limit Reached (5/5)
-                  </button>
-                )}
+                <Link to={`/app/scanning${location.search}`} className="cg-rescan-btn">
+                  Re - Scan Now
+                </Link>
               </div>
             </>
           )}
