@@ -355,18 +355,16 @@ export default function ScanningPage() {
   const hasTriggeredRef = useRef(false);
   const pctTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // 1. Auto-trigger scan on mount ONLY if quota allows
+  // 1. Auto-trigger scan on mount
   useEffect(() => {
-    if (!scanUsage.canScan) return;
     if (!hasTriggeredRef.current && fetcher.state === "idle" && !fetcher.data) {
       hasTriggeredRef.current = true;
       fetcher.submit({}, { method: "POST" });
     }
-  }, [fetcher, scanUsage.canScan]);
+  }, [fetcher]);
 
   // 2. Advance percentage counter smoothly (holds at 92 until backend returns)
   useEffect(() => {
-    if (!scanUsage.canScan) return;
     pctTimerRef.current = setInterval(() => {
       setPct((prev) => {
         const done = Boolean(fetcher.data?.success);
@@ -382,7 +380,7 @@ export default function ScanningPage() {
     return () => {
       if (pctTimerRef.current) clearInterval(pctTimerRef.current);
     };
-  }, [fetcher.data, scanUsage.canScan]);
+  }, [fetcher.data]);
 
   // 3. Derive active category step from pct (or completion)
   // Step 0: 0-24%   -> Policy pages active
@@ -470,34 +468,7 @@ export default function ScanningPage() {
     statusSubText = fetcher.data?.error || "An unexpected error occurred.";
   }
 
-  // ── Quota exceeded screen ────────────────────────────────────────────────────
-  if (!scanUsage.canScan) {
-    return (
-      <>
-        <style>{css}</style>
-        <div className="cg-canvas">
-          <div className="shell">
-            <div className="stage">
-              <div className="rings done">
-                <div className="core">
-                  <span className="core-mark">CG</span>
-                </div>
-              </div>
-              <div className="status-line">Monthly scan limit reached</div>
-              <div className="status-sub">
-                You&apos;ve used all {scanUsage.limit} scans this month. Quota resets on{" "}
-                {new Date(scanUsage.resetsAt).toLocaleDateString(undefined, {
-                  month: "long",
-                  day: "numeric",
-                })}
-                .
-              </div>
-            </div>
-          </div>
-        </div>
-      </>
-    );
-  }
+
 
   return (
     <>
