@@ -388,7 +388,7 @@ export async function checkPolicyQuality(policyText: string): Promise<PolicyQual
     [
       {
         role: "system",
-        content: `You are a Google Merchant Center and Shopify compliance auditor.
+        content: `You are an e-commerce and Shopify compliance auditor.
 Evaluate the refund/return policy against these mandatory requirements:
 1. A concrete return window must be stated (e.g. "within 30 days", "14 business days")
 2. Return item conditions must be specified (e.g. unused, original packaging, tags attached)
@@ -524,7 +524,7 @@ const fallbackCheck = () => {
     [
       {
         role: "system",
-        content: `You are a Google Merchant Center and Shopify AUP policy enforcer.
+        content: `You are an e-commerce and Shopify AUP policy enforcer.
 Scan the product listings for policy violations:
 - Unverifiable guarantees ("100% satisfaction", "best in the world", "guaranteed weight loss")
 - Medical/health claims ("cures", "treats", "clinically proven" without evidence)

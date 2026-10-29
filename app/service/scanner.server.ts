@@ -33,7 +33,7 @@ export const RULE_FIX_GUIDES: Record<string, string> = {
     "1. In Shopify Admin, go to Settings > Policies and review your Refund Policy.\n2. Clearly disclose return timeframes (e.g. 30 days), eligible item conditions (e.g. unworn, original packaging), and who pays return shipping costs.\n3. Verify on your live storefront (/policies/refund-policy) that the updated disclosures appear.",
 
   SHIPPING_POLICY_EXISTS:
-    "1. In Shopify Admin, go to Settings > Policies, draft your Shipping Policy (including handling times, transit times, and shipping rates), and click Save.\n2. To make it visible on your storefront, go to Online Store > Navigation > Footer menu. Click 'Add menu item', select 'Policies' > 'Shipping policy', and click Save menu.\n3. If your store has a password enabled, go to Online Store > Preferences and disable password protection so visitors and Google Merchant Center crawlers can access /policies/shipping-policy.",
+    "1. In Shopify Admin, go to Settings > Policies, draft your Shipping Policy (including handling times, transit times, and shipping rates), and click Save.\n2. To make it visible on your storefront, go to Online Store > Navigation > Footer menu. Click 'Add menu item', select 'Policies' > 'Shipping policy', and click Save menu.\n3. If your store has a password enabled, go to Online Store > Preferences and disable password protection so visitors can access /policies/shipping-policy.",
 
   PRIVACY_POLICY_EXISTS:
     "1. In Shopify Admin, go to Settings > Policies, draft your Privacy Policy, and click Save.\n2. To publish it on your storefront, go to Online Store > Navigation > Footer menu. Click 'Add menu item', select 'Policies' > 'Privacy policy', and click Save menu.\n3. Ensure storefront password protection is disabled under Online Store > Preferences.",
@@ -57,7 +57,7 @@ export const RULE_FIX_GUIDES: Record<string, string> = {
     "1. In Shopify Admin, check your official store name under Settings > General.\n2. In Online Store > Themes > Customize, update your storefront header title/logo and footer copyright text to match your official store name.",
 
   MERCHANT_CENTER_ADDRESS_VERIFY:
-    "1. In Google Merchant Center > Business information, confirm your registered business address.\n2. In Online Store > Themes > Customize, ensure the exact same address is displayed on your storefront Contact Us page or footer.",
+    "1. In Shopify Admin, check your official registered address under Settings > Store details.\n2. In Online Store > Themes > Customize, ensure the exact same address is displayed on your storefront Contact Us page or footer.",
 
   MISSING_GTIN_BARCODE:
     "1. In Shopify Admin, go to Products and open each flagged product variant.\n2. Under Inventory, enter a valid barcode (GTIN, UPC, EAN, or ISBN) for each variant.\n3. Click Save.",
@@ -673,7 +673,7 @@ export async function runStorefrontComplianceScan({
       ruleCode: "SHIPPING_POLICY_EXISTS",
       title: "Missing Shipping Policy page",
       description:
-        "No shipping policy found at /policies/shipping-policy. Clear transit and handling disclosures prevent merchant center suspensions.",
+        "No shipping policy found at /policies/shipping-policy. Clear transit and handling disclosures prevent ad channel and policy suspensions.",
       fixGuide: RULE_FIX_GUIDES.SHIPPING_POLICY_EXISTS,
     });
   }
@@ -912,7 +912,7 @@ export async function runStorefrontComplianceScan({
     });
   }
 
-  // Check 11: Address on storefront matches the address configured for Merchant Center
+  // Check 11: Address on storefront matches the official store billing/registered address
   const billing = shopData?.billingAddress;
   const hasBillingConfigured = Boolean(billing?.country || billing?.city);
   const addressMatchesStorefront =
@@ -930,9 +930,9 @@ export async function runStorefrontComplianceScan({
       category: "IDENTITY",
       severity: "INFO",
       ruleCode: "MERCHANT_CENTER_ADDRESS_VERIFY",
-      title: "Storefront address requires manual Merchant Center verification",
+      title: "Storefront address requires verification against store details",
       description:
-        "Could not automatically verify that the physical address displayed on your storefront exactly matches your registered Merchant Center / Shopify billing address.",
+        "Could not automatically verify that the physical address displayed on your storefront exactly matches your official registered Shopify store details / billing address.",
       fixGuide: RULE_FIX_GUIDES.MERCHANT_CENTER_ADDRESS_VERIFY,
     });
   }
@@ -962,7 +962,7 @@ export async function runStorefrontComplianceScan({
       ruleCode: "MISSING_GTIN_BARCODE",
       title: `${missingBarcodes} product variants missing Barcodes/GTINs`,
       description:
-        "Products listed on Google Shopping and Meta feeds require valid barcodes (GTIN, UPC, EAN, or ISBN).",
+        "Products listed on major shopping and ad feeds require valid barcodes (GTIN, UPC, EAN, or ISBN).",
       fixGuide: RULE_FIX_GUIDES.MISSING_GTIN_BARCODE,
     });
   }
@@ -995,7 +995,7 @@ export async function runStorefrontComplianceScan({
       ruleCode: "PRICE_MISMATCH_FEED",
       title: `${priceMismatchCount} products have price discrepancies between feed and live store`,
       description:
-        "A price mismatch was detected between live storefront JSON and catalog data. This is a primary cause for Google Merchant Center suspensions.",
+        "A price mismatch was detected between live storefront JSON and catalog data. This is a primary cause for ad feed disapprovals and suspensions.",
       fixGuide: RULE_FIX_GUIDES.PRICE_MISMATCH_FEED,
     });
   }

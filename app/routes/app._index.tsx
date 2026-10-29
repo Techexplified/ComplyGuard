@@ -136,7 +136,7 @@ const ALL_18_CHECKS = [
   { ruleCode: "EMAIL_OR_FORM_VISIBLE", label: "Email or contact form present", category: "IDENTITY", groupName: "Contact & business" },
   { ruleCode: "PHYSICAL_ADDRESS_VISIBLE", label: "Physical business address detected", category: "IDENTITY", groupName: "Contact & business" },
   { ruleCode: "BUSINESS_NAME_MISMATCH", label: "Business name matches Shopify settings", category: "IDENTITY", groupName: "Contact & business" },
-  { ruleCode: "MERCHANT_CENTER_ADDRESS_VERIFY", label: "Address matches Merchant Center", category: "IDENTITY", groupName: "Contact & business" },
+  { ruleCode: "MERCHANT_CENTER_ADDRESS_VERIFY", label: "Address matches store details", category: "IDENTITY", groupName: "Contact & business" },
 
   { ruleCode: "MISSING_GTIN_BARCODE", label: "Products have GTIN / barcodes", category: "PRODUCT_FEED", groupName: "Product feed" },
   { ruleCode: "PRICE_MISMATCH_FEED", label: "Storefront prices match product feed", category: "PRODUCT_FEED", groupName: "Product feed" },
