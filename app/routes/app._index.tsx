@@ -155,23 +155,25 @@ export interface ShopifyDeepLink {
   label: string;
 }
 
-function getShopifyDeepLink(ruleCode: string, shopDomain: string): ShopifyDeepLink {
-  const cleanDomain = (shopDomain || "").replace(".myshopify.com", "");
+function getShopifyDeepLink(ruleCode: string, shopDomain: string, category?: string): ShopifyDeepLink {
+  const cleanDomain = (shopDomain || "")
+    .replace(/^https?:\/\//, "")
+    .replace(".myshopify.com", "")
+    .replace(/\/.*$/, "");
   const base = `https://admin.shopify.com/store/${cleanDomain}`;
   let adminPath = "";
   let label = "Shopify Settings";
 
   if (
+    category === "POLICY" ||
     ruleCode.startsWith("REFUND") ||
     ruleCode.startsWith("SHIPPING") ||
     ruleCode.startsWith("PRIVACY") ||
-    ruleCode.startsWith("TERMS")
+    ruleCode.startsWith("TERMS") ||
+    ruleCode.includes("POLICY")
   ) {
-    adminPath = "settings/policies";
+    adminPath = "settings/legal";
     label = "Policies";
-  } else if (ruleCode === "POLICIES_NOT_IN_FOOTER") {
-    adminPath = "menus";
-    label = "Navigation Menus";
   } else if (
     ruleCode.includes("ADDRESS") ||
     ruleCode.includes("PHONE") ||
@@ -1093,11 +1095,17 @@ export default function DashboardPage() {
       if (isEmbedded) {
         e.preventDefault();
         try {
-          window.open(link.protocolUrl, "_top");
+          if ((window as any).shopify?.navigation?.navigate) {
+            (window as any).shopify.navigation.navigate(link.fullUrl);
+            return;
+          }
+        } catch {}
+        try {
+          window.open(link.fullUrl, "_top");
           return;
         } catch {
           try {
-            window.open(link.fullUrl, "_top");
+            window.open(link.protocolUrl, "_top");
             return;
           } catch {
             // fallback
@@ -1507,7 +1515,7 @@ export default function DashboardPage() {
                   <div className="cg-section-header">{issuesFound} ISSUES, RANKED BY PRIORITY</div>
                   <div className="cg-issues-list">
                     {unresolvedIssues.map((issue) => {
-                      const deepLink = getShopifyDeepLink(issue.ruleCode, shop.shopDomain);
+                      const deepLink = getShopifyDeepLink(issue.ruleCode, shop.shopDomain, issue.category);
                       const isExpanded = expandedIssueId === issue.id;
                       const badgeCls = issue.severity === "CRITICAL" ? "cg-badge-high" : "cg-badge-medium";
                       const badgeLabel = issue.severity === "CRITICAL" ? "HIGH" : "MEDIUM";

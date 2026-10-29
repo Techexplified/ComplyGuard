@@ -60,7 +60,7 @@ export const RULE_FIX_GUIDES: Record<string, string> = {
     "1. In Google Merchant Center > Business information, confirm your registered business address.\n2. In Online Store > Themes > Customize, ensure the exact same address is displayed on your storefront Contact Us page or footer.",
 
   MISSING_GTIN_BARCODE:
-    "1. In Shopify Admin, go to Products and open each flagged product variant.\n2. Under Inventory, enter a valid barcode (GTIN, UPC, EAN, or ISBN) for each variant.\n3. Click Save so your product feed syncs with Google Merchant Center.",
+    "1. In Shopify Admin, go to Products and open each flagged product variant.\n2. Under Inventory, enter a valid barcode (GTIN, UPC, EAN, or ISBN) for each variant.\n3. Click Save.",
 
   PRICE_MISMATCH_FEED:
     "1. In Shopify Admin, go to Products and verify that catalog prices match what shoppers see on your live storefront.\n2. Review any currency conversion or automatic discount apps that may cause live prices to differ from your catalog feed.",
@@ -750,12 +750,34 @@ export async function runStorefrontComplianceScan({
   const combinedDomText = `${homepageHtml} ${contactPageHtml}`.toLowerCase();
 
   // Check 7: Phone number present and visible on storefront
-  const hasTelLink =
-    $home('a[href^="tel:"]').length > 0 || $contact('a[href^="tel:"]').length > 0;
-  const hasPhoneRegex =
-    /(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}/.test(
-      $home("footer").text() + " " + contactPageHtml
-    );
+  // Scan across ALL fetched pages: homepage, contact, and all four policy pages.
+  const phoneRegex =
+    /(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}/;
+
+  // Aggregate all available page HTML for tel: link detection
+  const allPageHtmlSources = [
+    homepageHtml,
+    contactPageHtml,
+    refundData.html,
+    privacyData.html,
+    termsData.html,
+    shippingData.html,
+  ];
+
+  // Aggregate all available page text for regex-based phone number detection
+  const allPageTextSources = [
+    homepageHtml,                 // full homepage HTML (includes footer, header, etc.)
+    contactPageHtml,              // contact page full HTML
+    refundData.text,
+    privacyData.text,
+    termsData.text,
+    shippingData.text,
+  ].join(" ");
+
+  const hasTelLink = allPageHtmlSources.some(
+    (html) => html && cheerio.load(html)('a[href^="tel:"]').length > 0
+  );
+  const hasPhoneRegex = phoneRegex.test(allPageTextSources);
 
   if (hasTelLink || hasPhoneRegex) {
     passedChecks++;
@@ -766,7 +788,7 @@ export async function runStorefrontComplianceScan({
       ruleCode: "PHONE_NUMBER_VISIBLE",
       title: "Phone number not found on storefront",
       description:
-        "No customer support phone number or clickable tel: link was found in your footer or Contact page.",
+        "No customer support phone number or clickable tel: link was found across your homepage, Contact page, or any policy pages.",
       fixGuide: RULE_FIX_GUIDES.PHONE_NUMBER_VISIBLE,
     });
   }
