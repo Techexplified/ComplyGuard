@@ -33,7 +33,11 @@ api_version = "2026-10"
   compliance_topics = [ "shop/redact" ]
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [
+  "https://comply-guard.vercel.app/auth/callback",
+  "https://comply-guard.vercel.app/auth/shopify/callback",
+  "https://comply-guard.vercel.app/api/auth/callback"
+]
 
 [build]
 automatically_update_urls_on_dev = true
