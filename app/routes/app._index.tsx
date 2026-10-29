@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { HeadersFunction, LoaderFunctionArgs, ActionFunctionArgs } from "react-router";
 import { redirect, useLoaderData, useLocation, Form, Link, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -1078,6 +1078,12 @@ export default function DashboardPage() {
   const [expandedScanId, setExpandedScanId] = useState<string | null>(null);
   const [passwordBannerDismissed, setPasswordBannerDismissed] = useState(false);
 
+  const [isEmbedded, setIsEmbedded] = useState(true);
+
+  useEffect(() => {
+    setIsEmbedded(typeof window !== "undefined" && window.top !== window);
+  }, []);
+
   const cleanDomain = (shopDomain || "").replace(".myshopify.com", "");
   const preferencesLink: ShopifyDeepLink = {
     adminPath: "online_store/preferences",
@@ -1085,35 +1091,7 @@ export default function DashboardPage() {
     protocolUrl: "shopify://admin/online_store/preferences",
     label: "Preferences",
   };
-
-  const handleShopifyNavigate = (
-    e: React.MouseEvent<HTMLAnchorElement>,
-    link: ShopifyDeepLink
-  ) => {
-    if (typeof window !== "undefined") {
-      const isEmbedded = window.top !== window;
-      if (isEmbedded) {
-        e.preventDefault();
-        try {
-          if ((window as any).shopify?.navigation?.navigate) {
-            (window as any).shopify.navigation.navigate(link.fullUrl);
-            return;
-          }
-        } catch {}
-        try {
-          window.open(link.fullUrl, "_top");
-          return;
-        } catch {
-          try {
-            window.open(link.protocolUrl, "_top");
-            return;
-          } catch {
-            // fallback
-          }
-        }
-      }
-    }
-  };
+  const preferencesHref = isEmbedded ? preferencesLink.protocolUrl : preferencesLink.fullUrl;
 
   const scans = shop.scans || [];
   const allIssues = shop.issues || [];
@@ -1404,11 +1382,10 @@ export default function DashboardPage() {
                     </div>
                     <div className="cg-locked-actions">
                       <a
-                        href={preferencesLink.fullUrl}
-                        target="_top"
+                        href={preferencesHref}
+                        target={isEmbedded ? "_top" : "_blank"}
                         rel="noopener noreferrer"
                         className="cg-locked-btn"
-                        onClick={(e) => handleShopifyNavigate(e, preferencesLink)}
                       >
                         Remove Password in Shopify →
                       </a>
@@ -1516,6 +1493,7 @@ export default function DashboardPage() {
                   <div className="cg-issues-list">
                     {unresolvedIssues.map((issue) => {
                       const deepLink = getShopifyDeepLink(issue.ruleCode, shop.shopDomain, issue.category);
+                      const targetHref = isEmbedded ? deepLink.protocolUrl : deepLink.fullUrl;
                       const isExpanded = expandedIssueId === issue.id;
                       const badgeCls = issue.severity === "CRITICAL" ? "cg-badge-high" : "cg-badge-medium";
                       const badgeLabel = issue.severity === "CRITICAL" ? "HIGH" : "MEDIUM";
@@ -1536,11 +1514,10 @@ export default function DashboardPage() {
                             <button type="button" className="cg-issue-desc" onClick={() => setExpandedIssueId(isExpanded ? null : issue.id)}>{issue.description}</button>
                             <span className="cg-issue-cat">{categoryDisplay}</span>
                             <a
-                              href={deepLink.fullUrl}
-                              target="_top"
+                              href={targetHref}
+                              target={isEmbedded ? "_top" : "_blank"}
                               rel="noopener noreferrer"
                               className="cg-fix-btn"
-                              onClick={(e) => handleShopifyNavigate(e, deepLink)}
                               title={`Open ${deepLink.label} in Shopify`}
                             >
                               Fix in Shopify →
@@ -1559,12 +1536,11 @@ export default function DashboardPage() {
                               </div>
                               <div style={{ marginTop: 8, display: "flex", gap: 10 }}>
                                 <a
-                                  href={deepLink.fullUrl}
-                                  target="_top"
+                                  href={targetHref}
+                                  target={isEmbedded ? "_top" : "_blank"}
                                   rel="noopener noreferrer"
                                   className="cg-fix-btn"
                                   style={{ background: "#ea580c", color: "#ffffff" }}
-                                  onClick={(e) => handleShopifyNavigate(e, deepLink)}
                                 >
                                   Open {deepLink.label} in Shopify →
                                 </a>
