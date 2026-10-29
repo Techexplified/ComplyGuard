@@ -201,15 +201,15 @@ export function preparePageText(raw: string): string {
   const cleaned = cleanPageText(raw);
   const deduped = dedupeSentences(cleaned);
 
-  // Optionally append a focused address section so the AI always sees it,
-  // even if it sits past the 4000-char window.
-  const candidates = extractAddressCandidates(raw);
+  // Prepend focused address candidates so the AI always sees them
+  // within the 4000-char window even on long pages.
+  const candidates = extractAddressCandidates(cleaned);
   const addressBlock =
     candidates.length > 0
-      ? `\n\n[address candidates]\n${candidates.join("\n")}`
+      ? `[address candidates]\n${candidates.join("\n")}\n\n`
       : "";
 
-  return (deduped + addressBlock).trim();
+  return (addressBlock + deduped).trim();
 }
 
 
@@ -519,7 +519,7 @@ const fallbackCheck = () => {
     )
     .join("\n\n");
 
-  return invokeMultiProviderAi(
+  const result = await invokeMultiProviderAi(
     ProductClaimsSchema,
     [
       {
@@ -539,4 +539,14 @@ Flag only genuine violations. Do not flag normal product descriptions.`,
     "AI-Check 15: Product Claims",
     fallbackCheck()
   );
+
+  const flagged = (result.flagged || []).filter(
+    (f) => typeof f?.claim === "string" && f.claim.trim() !== ""
+  );
+
+  return {
+    ...result,
+    flagged,
+    pass: flagged.length === 0,
+  };
 }

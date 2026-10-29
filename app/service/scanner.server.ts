@@ -45,7 +45,7 @@ export const RULE_FIX_GUIDES: Record<string, string> = {
     "1. In Shopify Admin, go to Online Store > Navigation and click on 'Footer menu'.\n2. Click 'Add menu item', select 'Policies', and add your policies (Refund, Privacy, Terms of Service, Shipping).\n3. Click Save menu and check your storefront footer to verify the policy links are visible to visitors and crawlers.",
 
   PHONE_NUMBER_VISIBLE:
-    "1. In Shopify Admin, go to Online Store > Themes > Customize (or Online Store > Pages > Contact).\n2. Add a visible customer support phone number with a clickable link (e.g. <a href='tel:+1...'>Call Us</a>) in your storefront footer or Contact page.\n3. Click Save to publish your storefront changes.",
+    "1. In Shopify Admin, go to Online Store > Themes > Customize.\n2. In the theme editor, open the 'Footer' section and add a Text or Rich Text block. Enter your support phone number and wrap it in a clickable tel: link, e.g. <a href='tel:+1XXXXXXXXXX'>+1 (XXX) XXX-XXXX</a>.\n3. Alternatively, go to Online Store > Pages > Contact and add your phone number directly to that page.\n4. Click Save to publish your changes.",
 
   EMAIL_OR_FORM_VISIBLE:
     "1. In Shopify Admin, go to Online Store > Themes > Customize (or Online Store > Pages > Contact).\n2. Display your customer support email address or add a Contact Form block on your storefront footer or Contact page.\n3. Click Save to publish changes to your storefront.",
@@ -128,6 +128,40 @@ export async function getMonthlyScanUsage(shopDomain: string): Promise<MonthlySc
 }
 
 export const SCAN_DEBOUNCE_SECONDS = 15;
+
+/**
+ * Strip scripts, styles, and non-visible elements, then return visible body text.
+ * Prevents false positives from CDN paths, cache busters, JSON IDs, etc.
+ */
+function visibleText(html: string): string {
+  if (!html) return "";
+  const $v = cheerio.load(html);
+  $v("script, style, noscript, svg, template, iframe, meta, link").remove();
+  return $v("body").text().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Stricter phone number detector.
+ * - Requires exactly 10–15 digits total (ITU E.164 bounds)
+ * - Rejects: dates (2024-01-15), decimals/prices (19.99), timestamps (1698765432)
+ * - Rejects: digit sequences inside identifiers, CDN paths, or version strings
+ * - Accepts: US +1 800 555 0100, UK +44 20 7946 0958, Indian +91 98765 43210,
+ *            bare mobile 9876543210, formatted (555) 555-1234
+ */
+function hasVisiblePhone(text: string): boolean {
+  const re = /(?<![\w.\/=-])\+?\(?\d[\d\s().\-]{7,18}\d(?![\w])/g;
+  for (const m of text.matchAll(re)) {
+    const s = m[0].trim();
+    const digits = s.replace(/\D/g, "");
+    if (digits.length < 10 || digits.length > 15) continue;
+    if (/\d{4}[\-\/.\s]\d{1,2}[\-\/.\s]\d{1,2}/.test(s)) continue;
+    if (/\d{1,2}[\-\/.\s]\d{1,2}[\-\/.\s]\d{4}/.test(s)) continue;
+    if (/^\d+\.\d+/.test(s)) continue;
+    if (/^1[6-8]\d{8}$/.test(digits)) continue;
+    return true;
+  }
+  return false;
+}
 
 export async function runStorefrontComplianceScan({
   admin,
@@ -339,14 +373,11 @@ export async function runStorefrontComplianceScan({
   let storefrontProductsJson: StorefrontProduct[] = [];
   let contactPageHtml = "";
 
-  const [homeRes, prodJsonRes, contactRes] = await Promise.allSettled([
+  const [homeRes, prodJsonRes] = await Promise.allSettled([
     fetch(storeUrl, {
       headers: storefrontHeaders,
     }),
     fetch(`${storeUrl}/products.json?limit=20`, {
-      headers: storefrontHeaders,
-    }),
-    fetch(`${storeUrl}/pages/contact`, {
       headers: storefrontHeaders,
     }),
   ]);
@@ -354,13 +385,7 @@ export async function runStorefrontComplianceScan({
   if (homeRes.status === "fulfilled" && homeRes.value.ok) {
     try {
       homepageHtml = await homeRes.value.text();
-      console.log(
-        `\n============================================================\n` +
-        `[FETCHED HOMEPAGE HTML] URL: ${storeUrl} (${homepageHtml.length} characters)\n` +
-        `============================================================`
-      );
-      console.log(homepageHtml);
-      console.log(`==================== [END HOMEPAGE HTML] ====================\n`);
+      console.log(`[Storefront Fetch] Homepage fetched successfully (${homepageHtml.length} chars)`);
     } catch (e) {
       console.error("Failed to read homepage HTML text:", e);
     }
@@ -377,21 +402,29 @@ export async function runStorefrontComplianceScan({
     }
   }
 
-  if (contactRes.status === "fulfilled" && contactRes.value.ok) {
-    try {
-      contactPageHtml = await contactRes.value.text();
-      console.log(
-        `\n============================================================\n` +
-        `[FETCHED CONTACT PAGE HTML] URL: ${storeUrl}/pages/contact (${contactPageHtml.length} characters)\n` +
-        `============================================================`
-      );
-      console.log(contactPageHtml);
-      console.log(`==================== [END CONTACT PAGE HTML] ====================\n`);
-    } catch (e) {
-      console.error("Failed to read contact page HTML text:", e);
+  // ── Smart contact page discovery ──────────────────────────────────────────
+  // Tries multiple slugs so stores using /pages/contact-us etc. are not missed.
+  const CONTACT_SLUGS = [
+    "contact",
+    "contact-us",
+    "contactus",
+    "contact-me",
+    "reach-us",
+    "get-in-touch",
+    "help",
+    "support",
+  ];
+
+  for (const slug of CONTACT_SLUGS) {
+    const res = await fetchUrl(`${storeUrl}/pages/${slug}`);
+    if (res.exists) {
+      contactPageHtml = res.html;
+      console.log(`[Contact Fetch] Found contact page at ${storeUrl}/pages/${slug}`);
+      break;
     }
-  } else {
-    console.log(`[Storefront Fetch] Contact page not found or non-200 at ${storeUrl}/pages/contact`);
+  }
+  if (!contactPageHtml) {
+    console.log(`[Contact Fetch] No contact page found across known slugs.`);
   }
 
   const $home = cheerio.load(homepageHtml);
@@ -570,7 +603,9 @@ export async function runStorefrontComplianceScan({
     // Check 2: Policy quality
     checkPolicyQuality(refundData.exists ? refundData.text : ""),
     // Check 9: Physical address
-    checkPhysicalAddress(addressCandidateText || `${homepageHtml} ${contactPageHtml}`),
+    checkPhysicalAddress(
+      addressCandidateText || `${visibleText(homepageHtml)} ${visibleText(contactPageHtml)}`
+    ),
     // Check 15: Product claims
     checkProductClaims(
       products.map((p: { title: string; descriptionHtml: string }) => ({
@@ -685,14 +720,6 @@ export async function runStorefrontComplianceScan({
     footerSections.first().html() ||
     "No footer element found";
 
-  console.log(
-    `\n============================================================\n` +
-    `[EXTRACTED FOOTER HTML FOR POLICY & PAYMENT CHECKS]\n` +
-    `============================================================\n` +
-    realFooterHtml +
-    `\n==================== [END EXTRACTED FOOTER HTML] ====================\n`
-  );
-
   const footerHrefsList: string[] = [];
   footerSections.find("a").each((_, el) => {
     const href = $home(el).attr("href");
@@ -750,11 +777,8 @@ export async function runStorefrontComplianceScan({
   const combinedDomText = `${homepageHtml} ${contactPageHtml}`.toLowerCase();
 
   // Check 7: Phone number present and visible on storefront
-  // Scan across ALL fetched pages: homepage, contact, and all four policy pages.
-  const phoneRegex =
-    /(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,4}\)?[-.\s]?\d{3,4}[-.\s]?\d{3,4}/;
-
-  // Aggregate all available page HTML for tel: link detection
+  // Aggregate all available page HTML for tel: link detection.
+  // A tel: link only counts if it actually contains digits (not an empty href).
   const allPageHtmlSources = [
     homepageHtml,
     contactPageHtml,
@@ -764,23 +788,44 @@ export async function runStorefrontComplianceScan({
     shippingData.html,
   ];
 
-  // Aggregate all available page text for regex-based phone number detection
-  const allPageTextSources = [
-    homepageHtml,                 // full homepage HTML (includes footer, header, etc.)
-    contactPageHtml,              // contact page full HTML
+  const hasTelLink = allPageHtmlSources.some((html) => {
+    if (!html) return false;
+    const $pg = cheerio.load(html);
+    let found = false;
+    $pg('a[href^="tel:"]').each((_, el) => {
+      const href = $pg(el).attr("href") || "";
+      // Require at least 7 digits in the href to disqualify empty tel: links
+      if ((href.replace(/\D/g, "").length) >= 7) {
+        found = true;
+        return false; // break
+      }
+    });
+    return found;
+  });
+
+  // Build visible-text aggregate: homepage and contact get stripped,
+  // policy pages already use clean extracted text from fetchUrl().
+  const allVisibleText = [
+    visibleText(homepageHtml),
+    visibleText(contactPageHtml),
     refundData.text,
     privacyData.text,
     termsData.text,
     shippingData.text,
   ].join(" ");
 
-  const hasTelLink = allPageHtmlSources.some(
-    (html) => html && cheerio.load(html)('a[href^="tel:"]').length > 0
-  );
-  const hasPhoneRegex = phoneRegex.test(allPageTextSources);
+  // Only run the regex check when we have meaningful content to test.
+  // If homepage is empty (password-protected / fetch failed) and contact is also
+  // empty, we cannot reliably check → skip rather than report a false negative.
+  const hasEnoughContent = allVisibleText.trim().length > 200;
+  const hasPhoneRegex = hasEnoughContent && hasVisiblePhone(allVisibleText);
 
   if (hasTelLink || hasPhoneRegex) {
     passedChecks++;
+  } else if (!hasEnoughContent) {
+    // Storefront was unreachable / password-protected — skip this check
+    console.log("[Check 7] Skipping PHONE_NUMBER_VISIBLE: insufficient storefront content to verify.");
+    passedChecks++; // treat as passed/unverifiable rather than penalise
   } else {
     issues.push({
       category: "IDENTITY",
@@ -982,7 +1027,7 @@ export async function runStorefrontComplianceScan({
 
   // Check 15: Product descriptions flagged for risky promotional language
   // ── Now powered by GPT-4o-mini (falls back to keyword list if no API key) ──
-  if (aiClaimsResult.pass) {
+  if (aiClaimsResult.pass || !aiClaimsResult.flagged?.length) {
     passedChecks++;
   } else {
     const flaggedSummary = aiClaimsResult.flagged

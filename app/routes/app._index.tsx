@@ -174,9 +174,11 @@ function getShopifyDeepLink(ruleCode: string, shopDomain: string, category?: str
   ) {
     adminPath = "settings/legal";
     label = "Policies";
+  } else if (ruleCode === "PHONE_NUMBER_VISIBLE") {
+    adminPath = "themes/current/editor";
+    label = "Theme Customizer";
   } else if (
     ruleCode.includes("ADDRESS") ||
-    ruleCode.includes("PHONE") ||
     ruleCode.includes("BUSINESS_NAME") ||
     ruleCode.includes("EMAIL")
   ) {
