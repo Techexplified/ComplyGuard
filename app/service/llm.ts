@@ -101,7 +101,7 @@ export const LLM_CONFIG = {
 
   GEMINI: {
     PRIMARY: process.env.GEMINI_MODEL?.trim() || "gemini-2.0-flash",
-    FALLBACKS: ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"],
+    FALLBACKS: ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-pro"],
   },
 };
 
